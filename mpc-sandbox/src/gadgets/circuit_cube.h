@@ -28,6 +28,15 @@ struct CircuitCube {
     Bit_T<Ctx> pad;
 };
 
+// Just bits/mask, no pad: the payload gadgets/select_cube.h's select_cube
+// hands back (a validly-selected cube is never padding) and
+// gadgets/random_assignment.h consumes.
+template <BooleanContext Ctx, int N>
+struct CubeData {
+    BitVec_T<Ctx, N> bits;
+    BitVec_T<Ctx, N> mask;
+};
+
 // Wide enough to hold the largest possible weight, 2^N (an empty/all-free
 // cube, r=0), without overflow: 2^N in binary is a 1 followed by N zeros --
 // N+1 bits exactly.

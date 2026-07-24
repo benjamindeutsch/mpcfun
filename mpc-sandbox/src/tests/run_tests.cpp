@@ -14,6 +14,8 @@ int run_cube_weight_tests();
 int run_dnf_weight_tests();
 int run_cube_intervals_tests();
 int run_select_cube_tests();
+int run_random_assignment_tests();
+int run_count_satisfied_cubes_tests();
 
 int main() {
     std::printf("=== dimacs_dnf_test ===\n");
@@ -33,6 +35,12 @@ int main() {
 
     std::printf("=== select_cube_test ===\n");
     run_select_cube_tests();
+
+    std::printf("=== random_assignment_test ===\n");
+    run_random_assignment_tests();
+
+    std::printf("=== count_satisfied_cubes_test ===\n");
+    run_count_satisfied_cubes_tests();
 
     std::printf("=== all test suites passed ===\n");
     return 0;

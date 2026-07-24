@@ -85,16 +85,6 @@ CubeIndex<Ctx, M> select_cube_index(const DnfWeight<Ctx, N, M>& z,
     return count;
 }
 
-// Just the payload select_cube() below hands back: no `pad`, since a
-// validly-sampled index always lands in a non-padding cube (a padding
-// cube has weight 0 -- gadgets/cube_weight.h -- so it occupies a
-// zero-width slice of the intervals and z can never land in it).
-template <BooleanContext Ctx, int N>
-struct CubeData {
-    BitVec_T<Ctx, N> bits;
-    BitVec_T<Ctx, N> mask;
-};
-
 // Oblivious lookup of cubes[index-1]'s bits/mask (index is 1-indexed, as
 // returned by select_cube_index): a linear-scan mux over all M candidates
 // -- O(M) equality comparisons and selects, fine for the small M this

@@ -60,13 +60,20 @@ both args optional -- default to the bundled `alice.dnf`/`bob.dnf`):
 
 ```sh
 ./run.sh
-# [alice] file=alice.dnf  total_weight=20  sample=15  cube_index(1-indexed)=3  cube_bits=1000  cube_mask=1100  intervals=[0,8,12,16,20]
-# [bob]   file=bob.dnf  total_weight=20  sample=15  cube_index(1-indexed)=3  cube_bits=1000  cube_mask=1100  intervals=[0,8,12,16,20]
+# [alice] file=alice.dnf  total_weight=20  sample=15  cube_index(1-indexed)=3  cube_bits=1000  cube_mask=1100  assignment=1010  satisfied_count=4  intervals=[0,8,12,16,20]
+# [bob]   file=bob.dnf  total_weight=20  sample=15  cube_index(1-indexed)=3  cube_bits=1000  cube_mask=1100  assignment=1010  satisfied_count=4  intervals=[0,8,12,16,20]
 ```
 
 (`sample` is a fresh joint-random draw in `[1, total_weight]` each run;
-`cube_index` is the (1-indexed) cube whose block it falls in, and
-`cube_bits`/`cube_mask` are that cube's data -- both parties always agree
+`cube_index` is the (1-indexed) cube whose block it falls in;
+`cube_bits`/`cube_mask` are that cube's data; `assignment` is a
+uniformly random full assignment satisfying it (matching `cube_bits` on
+every variable `cube_mask` constrains, random elsewhere); and
+`satisfied_count` is how many of the 4 conjunction cubes `assignment`
+satisfies -- always `>= 1`, and here it's `4`, since `x1=1,x3=1`
+(`assignment`'s bits `1_1_`) happens to satisfy every one of Alice's and
+Bob's original cubes at once -- both parties
+always agree
 on all of it, but it varies run to run.)
 
 Alice listens on a fixed localhost port (default `12345`); Bob connects to
@@ -114,12 +121,13 @@ particular working directory.)
 
 `src/gadgets/circuit_cube.h` defines `CircuitCube<Ctx,N>{bits, mask, pad}`,
 the same fields as `dimacs_dnf::Cube` but as wires
-(`emp::BitVec_T<Ctx,N>`/`emp::Bit_T<Ctx>`) instead of `vector<bool>`/`bool`,
-plus the `CubeWeight<Ctx,N>` and `DnfWeight<Ctx,N,M>` aliases used by
-`cube_weight.h`/`dnf_weight.h`/`cube_intervals.h`/`select_cube.h`. All
-three are shared foundational types, not specific to any one gadget --
-they live in their own file (rather than inside whichever gadget happened
-to need them first) for exactly that reason.
+(`emp::BitVec_T<Ctx,N>`/`emp::Bit_T<Ctx>`) instead of `vector<bool>`/`bool`;
+`CubeData<Ctx,N>{bits, mask}` (no `pad`); and the `CubeWeight<Ctx,N>` and
+`DnfWeight<Ctx,N,M>` aliases. All four are shared foundational types, used
+by more than one gadget (`cube_weight.h`/`dnf_weight.h`/
+`cube_intervals.h`/`select_cube.h`/`random_assignment.h`) -- they live in
+their own file (rather than inside whichever gadget happened to need them
+first) for exactly that reason.
 
 `src/gadgets/dnf_distribute.h`'s `conjoin`/`conjoin_dnf` use `CircuitCube`
 for both inputs and outputs -- there's no separate "result" type, since a
@@ -268,6 +276,49 @@ every index `1..4` against 4 distinct one-hot test cubes; and for the
 composed `select_cube`, one case checking that a known `(sample, index)`
 pair resolves to the right `cube.bits`/`cube.mask`.
 
+### Random assignment
+
+`src/gadgets/random_assignment.h` extends a `CubeData<Ctx,N>` (e.g. from
+`select_cube`) into a full, uniformly random satisfying assignment over
+all `N` variables:
+
+```
+assignment = bits | (~mask & r)
+```
+
+where `r = alice_r ^ bob_r` is a second joint random bitstring (same
+free-XOR construction as `sample_in_range`). On a constrained variable
+(`mask=1`): `bits | (~1 & r) = bits` -- the cube's own value wins. On a
+free variable (`mask=0`, so `bits=0` there by the `circuit_cube.h`
+convention): `bits | (~0 & r) = r` -- filled in randomly. So if `r` is
+uniform, the result is a uniformly random assignment satisfying the cube.
+
+Also tested via `emp::ClearSession` in
+`src/tests/random_assignment_test.cpp`: a fully-constrained cube (the
+assignment is just the cube's bits, `r` irrelevant), an empty cube (the
+assignment is exactly `r`), and a partially-constrained cube with two
+different `r` values (the fixed bit stays put; the free bits track `r`).
+
+### Count satisfied cubes
+
+`src/gadgets/count_satisfied_cubes.h` counts how many cubes in an array a
+given assignment satisfies: cube `c` is satisfied iff `(assignment &
+c.mask) == c.bits` -- assignment agrees with `c` on every variable `c`
+constrains (variables `c` leaves free never affect the check). A padding
+cube (`bits=1^N, mask=0^N`) is *never* satisfied by this check with no
+special-casing needed: `assignment & 0^N = 0^N`, and `0^N != 1^N` for any
+`N > 0`, so the equality always fails. `count_satisfied_cubes(assignment,
+cubes)` returns a `SatisfiedCount<Ctx,M>` (`= UInt_T<Ctx, bits_for(M)>`),
+built the same way as `select_cube_index`'s count: each `Bit_T` comparison
+turned into 0/1 via `.select()` before accumulating.
+
+Also tested via `emp::ClearSession` in
+`src/tests/count_satisfied_cubes_test.cpp`, against 3 ordinary cubes plus
+a padding cube: assignments satisfying `0`, `1`, `2`, and `3` of the
+ordinary cubes, checking in each case that the padding cube is never
+counted -- including when every bit of the assignment happens to match
+the padding cube's own `bits` pattern.
+
 ## Putting it together
 
 `src/main.cpp` is the two-party pipeline: each party's private input is a
@@ -289,7 +340,15 @@ private input to the circuit, which:
    section above). `main.cpp` calls the three underlying pieces
    (`sample_in_range`/`select_cube_index`/`cube_at_index`) directly rather
    than the composed `select_cube`, since it also wants to reveal the
-   intermediate sample/index, which `select_cube` doesn't return.
+   intermediate sample/index, which `select_cube` doesn't return, and
+7. draws a second joint random contribution and extends the selected cube
+   into a full random satisfying assignment over all `VARS` variables
+   (`random_assignment` -- see its section above), and
+8. counts how many of the `CUBES*CUBES` conjunction cubes that assignment
+   actually satisfies (`count_satisfied_cubes` -- see its section above)
+   as a sanity check: always `>= 1` (the cube it was built from), possibly
+   more, since these particular conjunction cubes aren't guaranteed
+   pairwise disjoint.
 
 `VARS`/`CUBES` (currently `4`/`2`, so `PRODUCT = CUBES*CUBES = 4`) are
 compile-time constants shared by both parties, not read from either file --
@@ -364,12 +423,14 @@ a whole now needs emp-tool too.
 - `src/utils/` -- data-prep helpers with no emp-tool dependency:
   - `dimacs_dnf.h` -- the DIMACS-DNF cube parser (header-only: `parse<VARS,CUBES>` is a template).
 - `src/gadgets/` -- Ctx-generic circuit gadgets, reusable across sessions:
-  - `circuit_cube.h` -- `CircuitCube`, `CubeWeight`, `DnfWeight`: the shared wire-level types.
+  - `circuit_cube.h` -- `CircuitCube`, `CubeData`, `CubeWeight`, `DnfWeight`: the shared wire-level types.
   - `dnf_distribute.h` -- the DNF-cube conjunction gadget.
   - `cube_weight.h` -- the per-cube satisfying-assignment-count gadget.
   - `dnf_weight.h` -- sums cube weights into the whole DNF's satisfying-assignment count.
   - `cube_intervals.h` -- the exclusive prefix sum of cube weights.
   - `select_cube.h` -- samples a joint random value, then selects and looks up the cube it lands in.
+  - `random_assignment.h` -- extends a selected cube into a full random satisfying assignment.
+  - `count_satisfied_cubes.h` -- counts how many cubes in an array an assignment satisfies.
 - `src/tests/` -- unit tests, all built into the single `run_tests` binary:
   - `run_tests.cpp` -- the shared `main()`; calls each suite below.
   - `dimacs_dnf_test.cpp` -- tests for `utils/dimacs_dnf.h`.
@@ -378,6 +439,8 @@ a whole now needs emp-tool too.
   - `dnf_weight_test.cpp` -- tests for `gadgets/dnf_weight.h` (`emp::ClearSession`-based, no network).
   - `cube_intervals_test.cpp` -- tests for `gadgets/cube_intervals.h` (`emp::ClearSession`-based, no network).
   - `select_cube_test.cpp` -- tests for `gadgets/select_cube.h` (`emp::ClearSession`-based, no network).
+  - `random_assignment_test.cpp` -- tests for `gadgets/random_assignment.h` (`emp::ClearSession`-based, no network).
+  - `count_satisfied_cubes_test.cpp` -- tests for `gadgets/count_satisfied_cubes.h` (`emp::ClearSession`-based, no network).
 - `sample.dnf` -- a standalone example DIMACS-DNF file (used by `dimacs_dnf_test.cpp`'s docs, not read by any binary).
 - `alice.dnf` / `bob.dnf` -- the two parties' example private inputs to `main.cpp`.
 - `run.sh` -- launches both parties of `sh2pc_demo` locally for a quick check.

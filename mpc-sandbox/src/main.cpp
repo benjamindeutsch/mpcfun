@@ -16,7 +16,18 @@
 //      cube whose block z falls in via the T_0..T_M boundaries
 //      (select_cube_index), and looks up that cube's bits/mask
 //      (cube_at_index) -- see main() for why these are called directly
-//      rather than through select_cube(), which only returns the cube.
+//      rather than through select_cube(), which only returns the cube --
+//      and
+//   6. extends that cube into a full, uniformly random satisfying
+//      assignment over all VARS variables (gadgets/random_assignment.h),
+//      using a second joint random bitstring to fill in whatever the
+//      cube leaves unconstrained, and
+//   7. counts how many of the CUBES*CUBES conjunction cubes that
+//      assignment satisfies (gadgets/count_satisfied_cubes.h) -- a sanity
+//      check that it's at least 1 (the cube it was built from); it can be
+//      more than 1, since these particular conjunction cubes aren't
+//      guaranteed pairwise disjoint (unlike what gadgets/dnf_weight.h's
+//      sum assumes).
 //
 // All of the above is revealed to both parties at the end. That's NOT the
 // final protocol -- it's a placeholder so the whole pipeline can be
@@ -45,6 +56,8 @@
 #include "gadgets/dnf_weight.h"
 #include "gadgets/cube_intervals.h"
 #include "gadgets/select_cube.h"
+#include "gadgets/random_assignment.h"
+#include "gadgets/count_satisfied_cubes.h"
 
 #include <array>
 #include <cstddef>
@@ -147,11 +160,28 @@ int main(int argc, char** argv) {
     CubeIndex<Ctx, PRODUCT> cube_index = select_cube_index<Ctx, VARS, PRODUCT>(sample, intervals);
     CubeData<Ctx, VARS> selected = cube_at_index<Ctx, VARS, PRODUCT>(cube_index, conjunction);
 
+    // Extend the selected cube into a full random satisfying assignment
+    // (gadgets/random_assignment.h): a second, independent joint random
+    // bitstring (same free-XOR construction, drawn/fed in the same way)
+    // fills in whatever the cube leaves unconstrained.
+    array<bool, VARS> my_assignment_bits{};
+    PRG().random_bool(my_assignment_bits.data(), VARS);
+    BV assignment_alice_r = sess.input<BV>(ALICE, my_assignment_bits);
+    BV assignment_bob_r   = sess.input<BV>(BOB,   my_assignment_bits);
+    BV assignment = random_assignment<Ctx, VARS>(selected, assignment_alice_r, assignment_bob_r);
+
+    // Sanity check: how many of the conjunction's cubes does assignment
+    // actually satisfy (gadgets/count_satisfied_cubes.h)? Always >= 1.
+    SatisfiedCount<Ctx, PRODUCT> satisfied_count =
+        count_satisfied_cubes<Ctx, VARS, PRODUCT>(assignment, conjunction);
+
     uint64_t total_out = sess.reveal(total, PUBLIC).value();
     uint64_t sample_out = sess.reveal(sample, PUBLIC).value();
     uint64_t cube_index_out = sess.reveal(cube_index, PUBLIC).value();
     array<bool, VARS> cube_bits_out = sess.reveal(selected.bits, PUBLIC).value();
     array<bool, VARS> cube_mask_out = sess.reveal(selected.mask, PUBLIC).value();
+    array<bool, VARS> assignment_out = sess.reveal(assignment, PUBLIC).value();
+    uint64_t satisfied_count_out = sess.reveal(satisfied_count, PUBLIC).value();
     array<uint64_t, PRODUCT + 1> intervals_out{};
     for (int i = 0; i < PRODUCT + 1; ++i)
         intervals_out[(size_t)i] = sess.reveal(intervals[(size_t)i], PUBLIC).value();
@@ -167,7 +197,10 @@ int main(int argc, char** argv) {
     for (int i = 0; i < VARS; ++i) std::cout << (cube_bits_out[(size_t)i] ? '1' : '0');
     std::cout << "  cube_mask=";
     for (int i = 0; i < VARS; ++i) std::cout << (cube_mask_out[(size_t)i] ? '1' : '0');
-    std::cout << "  intervals=[";
+    std::cout << "  assignment=";
+    for (int i = 0; i < VARS; ++i) std::cout << (assignment_out[(size_t)i] ? '1' : '0');
+    std::cout << "  satisfied_count=" << satisfied_count_out
+              << "  intervals=[";
     for (int i = 0; i < PRODUCT + 1; ++i) {
         if (i) std::cout << ",";
         std::cout << intervals_out[(size_t)i];
