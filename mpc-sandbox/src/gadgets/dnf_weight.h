@@ -13,7 +13,6 @@
 
 #include "gadgets/circuit_cube.h"
 #include "emp-tool/circuits/typed.h"
-#include "emp-tool/circuits/numeric_kernels.h"
 
 #include <array>
 #include <cstddef>
@@ -21,17 +20,8 @@
 using std::array;
 using std::size_t;
 using emp::BooleanContext;
-using emp::UInt_T;
-using emp::kernel::bits_for;
 
 namespace gadgets {
-
-// Wide enough to hold the largest possible sum of M CubeWeight<Ctx,N> terms
-// (each up to 2^N): M * 2^N < 2^(N + bits_for(M)), so N + bits_for(M) bits
-// always suffice, regardless of how large N itself is (bits_for(M) depends
-// only on the compile-time cube count M, not on 2^N).
-template <BooleanContext Ctx, int N, int M>
-using DnfWeight = UInt_T<Ctx, N + bits_for(M)>;
 
 template <BooleanContext Ctx, int N, int M>
 DnfWeight<Ctx, N, M> dnf_weight(const array<CubeWeight<Ctx, N>, (size_t)M>& weights) {

@@ -186,6 +186,25 @@ Also tested via `emp::ClearSession` in `src/tests/dnf_weight_test.cpp`,
 including summing the exact four cubes from `cube_weight_test.cpp`
 (`16 + 1 + 8 + 0 = 25`).
 
+### Cube intervals
+
+`src/gadgets/cube_intervals.h` takes the same `std::array<CubeWeight<Ctx,N>,
+M>` and computes its `M`-element *exclusive prefix sum*:
+`intervals[0] = 0`, `intervals[i+1] = intervals[i] + weights[i]`.
+`intervals[i]` is the total weight of every cube before `i` -- the starting
+offset of cube `i`'s own block in a running enumeration of satisfying
+assignments (useful for, e.g., mapping a random index into which cube it
+falls in). The output stays length `M`, not `M+1`: `weights[M-1]` never
+gets added to anything here, since there's no `intervals[M]` slot for that
+sum -- `dnf_weight` computes the grand total separately, if that's what's
+needed. Reuses `dnf_weight.h`'s `DnfWeight<Ctx,N,M>` as the element type,
+since an exclusive prefix sum is a subset of the same summation.
+
+Also tested via `emp::ClearSession` in `src/tests/cube_intervals_test.cpp`,
+including the exact cube_weight/dnf_weight test cases: weights `[16,1,8,0]`
+-> intervals `[0,16,17,25]`, and weights `[4,8,1,1]` -> intervals
+`[0,4,12,13]`.
+
 ## Tests
 
 Every `tests/*_test.cpp` file builds into one binary, `build/run_tests`:
@@ -213,6 +232,10 @@ previous one passed in full.
 # PASS single cube: sum = its own weight
 # ...
 # dnf_weight_test: all checks passed
+# === cube_intervals_test ===
+# PASS empty+full+single+padding: intervals = [0,16,17,25]
+# ...
+# cube_intervals_test: all checks passed
 # === all test suites passed ===
 ```
 
@@ -236,11 +259,13 @@ a whole now needs emp-tool too.
   - `dnf_distribute.h` -- the DNF-cube conjunction gadget.
   - `cube_weight.h` -- the per-cube satisfying-assignment-count gadget.
   - `dnf_weight.h` -- sums cube weights into the whole DNF's satisfying-assignment count.
+  - `cube_intervals.h` -- the exclusive prefix sum of cube weights.
 - `src/tests/` -- unit tests, all built into the single `run_tests` binary:
   - `run_tests.cpp` -- the shared `main()`; calls each suite below.
   - `dimacs_dnf_test.cpp` -- tests for `utils/dimacs_dnf.h`.
   - `dnf_distribute_test.cpp` -- tests for `gadgets/dnf_distribute.h` (`emp::ClearSession`-based, no network).
   - `cube_weight_test.cpp` -- tests for `gadgets/cube_weight.h` (`emp::ClearSession`-based, no network).
   - `dnf_weight_test.cpp` -- tests for `gadgets/dnf_weight.h` (`emp::ClearSession`-based, no network).
+  - `cube_intervals_test.cpp` -- tests for `gadgets/cube_intervals.h` (`emp::ClearSession`-based, no network).
 - `sample.dnf.cnf` -- a standalone example DIMACS-DNF file.
 - `run.sh` -- launches both parties locally for a quick check.

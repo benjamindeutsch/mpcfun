@@ -32,4 +32,11 @@ struct CircuitCube {
 template <BooleanContext Ctx, int N>
 using CubeWeight = UInt_T<Ctx, N + 1>;
 
+// Wide enough to hold the largest possible sum of M CubeWeight<Ctx,N> terms
+// (each up to 2^N): M * 2^N < 2^(N + bits_for(M)), so N + bits_for(M) bits
+// always suffice, regardless of how large N itself is (bits_for(M) depends
+// only on the compile-time cube count M, not on 2^N).
+template <BooleanContext Ctx, int N, int M>
+using DnfWeight = UInt_T<Ctx, N + bits_for(M)>;
+
 }  // namespace gadgets
