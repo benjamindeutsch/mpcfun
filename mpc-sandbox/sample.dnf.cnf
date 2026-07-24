@@ -1,0 +1,7 @@
+c Sample DIMACS-DNF file: each line below is one cube (conjunction of
+c literals), and the file as a whole is their disjunction.
+c 5 variables, 3 cubes.
+p dnf 5 3
+1 -3 5 0
+-2 4 0
+0

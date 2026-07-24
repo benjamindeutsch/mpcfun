@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Launches both parties of sh2pc_demo against each other over localhost.
 #
-# Usage: ./run.sh <alice-value> <bob-value>
-# Example: ./run.sh 7 5   ->  sum=12, max=7
+# Usage: ./run.sh <alice-bits> <bob-bits>
+# Example: ./run.sh   -> AND/OR/XOR/NOT/EQ over the default 32-bit patterns
 
 set -euo pipefail
 
-ALICE_VAL="${1:-7}"
-BOB_VAL="${2:-5}"
+ALICE_BITS="${1:-11001100110011001100110011001100}"
+BOB_BITS="${2:-10101010101010101010101010101010}"
 BIN="$(dirname "$0")/build/sh2pc_demo"
 
 if [[ ! -x "$BIN" ]]; then
@@ -15,13 +15,13 @@ if [[ ! -x "$BIN" ]]; then
     exit 1
 fi
 
-"$BIN" 1 "$ALICE_VAL" &
+"$BIN" 1 "$ALICE_BITS" &
 ALICE_PID=$!
 
 # Give Alice a moment to bind/listen before Bob connects.
 sleep 0.3
 
-"$BIN" 2 "$BOB_VAL" &
+"$BIN" 2 "$BOB_BITS" &
 BOB_PID=$!
 
 wait "$ALICE_PID" "$BOB_PID"

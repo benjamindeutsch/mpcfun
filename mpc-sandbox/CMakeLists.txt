@@ -33,6 +33,10 @@ if(NOT GMP_INCLUDE_DIR OR NOT GMP_LIBRARY)
     message(FATAL_ERROR "GMP not found. On Fedora: sudo dnf install gmp-devel gmp-c++")
 endif()
 
+# src/ itself is on the include path so headers are referenced by their
+# folder (gadgets/..., utils/...) from anywhere under src/, e.g. in tests/.
+set(MPC_SANDBOX_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
 add_executable(sh2pc_demo src/main.cpp)
 target_link_libraries(sh2pc_demo PRIVATE
     emp-sh2pc::emp-sh2pc
@@ -42,4 +46,21 @@ target_link_libraries(sh2pc_demo PRIVATE
     ${GMP_LIBRARY}
     ${GMPXX_LIBRARY}
 )
-target_include_directories(sh2pc_demo PRIVATE ${GMP_INCLUDE_DIR})
+target_include_directories(sh2pc_demo PRIVATE ${GMP_INCLUDE_DIR} ${MPC_SANDBOX_SRC_DIR})
+
+# One test binary for every tests/*_test.cpp (see run_tests.cpp): each
+# exposes a run_*_tests() called from run_tests.cpp's main(), so a new test
+# file only needs adding to this source list + a declaration+call in
+# run_tests.cpp, not a whole new executable target. dnf_distribute_test.cpp
+# needs emp-tool (it drives gadgets/dnf_distribute.h through
+# emp::ClearSession); dimacs_dnf_test.cpp doesn't, but sharing one binary
+# means it now links emp-tool too -- the trade-off for a single executable.
+add_executable(run_tests
+    src/tests/run_tests.cpp
+    src/tests/dimacs_dnf_test.cpp
+    src/tests/dnf_distribute_test.cpp
+    src/tests/cube_weight_test.cpp
+    src/tests/dnf_weight_test.cpp
+)
+target_link_libraries(run_tests PRIVATE emp-tool::emp-tool)
+target_include_directories(run_tests PRIVATE ${MPC_SANDBOX_SRC_DIR})
