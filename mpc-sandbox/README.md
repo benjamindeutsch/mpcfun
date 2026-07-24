@@ -60,12 +60,14 @@ both args optional -- default to the bundled `alice.dnf`/`bob.dnf`):
 
 ```sh
 ./run.sh
-# [alice] file=alice.dnf  total_weight=20  sample=15  intervals=[0,8,12,16,20]
-# [bob]   file=bob.dnf  total_weight=20  sample=15  intervals=[0,8,12,16,20]
+# [alice] file=alice.dnf  total_weight=20  sample=15  cube_index(1-indexed)=3  cube_bits=1000  cube_mask=1100  intervals=[0,8,12,16,20]
+# [bob]   file=bob.dnf  total_weight=20  sample=15  cube_index(1-indexed)=3  cube_bits=1000  cube_mask=1100  intervals=[0,8,12,16,20]
 ```
 
-(`sample` is a fresh joint-random draw in `[1, total_weight]` each run --
-both parties always agree on it, but it varies run to run.)
+(`sample` is a fresh joint-random draw in `[1, total_weight]` each run;
+`cube_index` is the (1-indexed) cube whose block it falls in, and
+`cube_bits`/`cube_mask` are that cube's data -- both parties always agree
+on all of it, but it varies run to run.)
 
 Alice listens on a fixed localhost port (default `12345`); Bob connects to
 it. Override with the `EMP_PORT` (port) and `EMP_PEER_IP` (Bob's target
@@ -114,7 +116,7 @@ particular working directory.)
 the same fields as `dimacs_dnf::Cube` but as wires
 (`emp::BitVec_T<Ctx,N>`/`emp::Bit_T<Ctx>`) instead of `vector<bool>`/`bool`,
 plus the `CubeWeight<Ctx,N>` and `DnfWeight<Ctx,N,M>` aliases used by
-`cube_weight.h`/`dnf_weight.h`/`cube_intervals.h`/`sample_cube.h`. All
+`cube_weight.h`/`dnf_weight.h`/`cube_intervals.h`/`select_cube.h`. All
 three are shared foundational types, not specific to any one gadget --
 they live in their own file (rather than inside whichever gadget happened
 to need them first) for exactly that reason.
@@ -211,31 +213,60 @@ including the exact cube_weight/dnf_weight test cases: weights `[16,1,8,0]`
 `[0,4,12,13,14]` (both `T_M` values matching the corresponding
 `dnf_weight_test.cpp` totals: `25` and `14`).
 
-### Sample cube
+### Select cube
 
-`src/gadgets/sample_cube.h` combines the two parties' random contributions
-into a joint uniform sample in `[1, total_weight]`: `sample_cube(alice_r,
-bob_r, total)` computes `(alice_r ^ bob_r).as_uint() % total`, then `+1`.
-The `^` is a free-XOR coin flip -- uniform as long as *either* contribution
-is honestly random, regardless of what the other party supplies -- so this
-gadget only does that wire-level combination; drawing the actual random
-bits (real entropy, not a fixed seed) and feeding them in as private input
-is the caller's job, same as any other private input, so the gadget stays
-pure `Ctx`-generic math like every other one here (and stays testable via
-`emp::ClearSession`, which can't demonstrate the randomness property but
-can check the arithmetic). Assumes `total > 0` (the conjunction has at
-least one satisfiable cube) -- mod-by-zero otherwise. `SampleBits<Ctx,N,M>`
-is the contribution type -- a `BitVec_T` matching `DnfWeight<Ctx,N,M>`'s
-own width, so the XOR result reinterprets as one for free.
+`src/gadgets/select_cube.h` samples a joint random integer in
+`[1, total_weight]`, finds which cube's block it falls in, and looks up
+that cube's bits/mask -- composed from three separately testable pieces
+(`select_cube(alice_r, bob_r, total, intervals, cubes)` just calls them in
+sequence and returns the final `CubeData<Ctx,N>{bits, mask}`; the
+intermediate sample/index aren't part of its return value -- a caller that
+wants those too, e.g. for testing, calls `sample_in_range`/
+`select_cube_index` directly instead, as `main.cpp` does):
 
-More is coming here (name's not fully justified yet): the next step is
-picking *which* cube the sample lands in, via the `cube_intervals.h`
-boundaries.
+1. **`sample_in_range(alice_r, bob_r, total)`** computes `(alice_r ^
+   bob_r).as_uint() % total`, then `+1`. The `^` is a free-XOR coin flip --
+   uniform as long as *either* contribution is honestly random, regardless
+   of what the other party supplies -- so this only does that wire-level
+   combination; drawing the actual random bits (real entropy, not a fixed
+   seed) and feeding them in as private input is the caller's job, same as
+   any other private input. Assumes `total > 0` (the conjunction has at
+   least one satisfiable cube) -- mod-by-zero otherwise. `SampleBits<Ctx,
+   N,M>` is the contribution type -- a `BitVec_T` matching
+   `DnfWeight<Ctx,N,M>`'s own width, so the XOR result reinterprets as one
+   for free.
 
-Also tested via `emp::ClearSession` in `src/tests/sample_cube_test.cpp`,
-checking the arithmetic against hand-computed cases (a basic case, wrapping
-above `total`, the minimum/maximum possible sample, and both contributions
-nonzero).
+2. **`select_cube_index(z, intervals)`** finds the unique **1-indexed**
+   `j` with `intervals[j-1] < z <= intervals[j]` -- i.e. which cube's
+   block the sample `z` landed in, counting cubes from `1` (cube `1` is
+   `intervals[0..1]`, cube `M` is `intervals[M-1..M]`). Computed as `j =
+   sum_{i=0}^{M} [z > intervals[i]]`: `intervals` is non-decreasing, so
+   the boundaries below `z` are exactly `intervals[0..j-1]` (`j` of them),
+   making the raw sum equal to `j` directly -- no separate "invert the
+   count" step needed. Each `[z > intervals[i]]` comparison is a `Bit_T`,
+   turned into a 0/1 `CubeIndex<Ctx,M>` (`= UInt_T<Ctx, bits_for(M+1)>`)
+   via `.select()` (`sel ? 1 : 0`) before accumulating.
+
+3. **`cube_at_index(index, cubes)`** obliviously looks up
+   `cubes[index-1]`'s bits/mask (translating the 1-indexed `index` back to
+   a 0-indexed array position happens for free, by comparing `index`
+   against the constant `i+1` for each candidate `i`, rather than via a
+   separate subtraction). A linear-scan mux: `O(M)` equality comparisons
+   and `.select()`s, fine for the small `M` this pipeline uses. Returns a
+   `CubeData<Ctx,N>{bits, mask}` -- no `pad`, since a validly-sampled
+   index always lands in a non-padding cube (a padding cube has weight
+   `0`, so it occupies a zero-width slice of the intervals that `z` can
+   never land in).
+
+Also tested via `emp::ClearSession` in `src/tests/select_cube_test.cpp`:
+for `sample_in_range`, a basic case, wrapping above `total`, the
+minimum/maximum possible sample, and both contributions nonzero; for
+`select_cube_index`, every boundary (including exact hits, like `z=12`
+landing in the cube ending at `intervals[2]=12`) against the exact
+`intervals=[0,8,12,16,20]` from the `main.cpp` demo; for `cube_at_index`,
+every index `1..4` against 4 distinct one-hot test cubes; and for the
+composed `select_cube`, one case checking that a known `(sample, index)`
+pair resolves to the right `cube.bits`/`cube.mask`.
 
 ## Putting it together
 
@@ -252,9 +283,13 @@ private input to the circuit, which:
    (`dnf_weight`),
 5. computes the `CUBES*CUBES+1` interval boundaries over the weights
    (`cube_intervals`), and
-6. draws each party's local random contribution and combines them into a
-   joint uniform sample in `[1, total_weight]` (`sample_cube` -- see its
-   section above for how).
+6. draws each party's local random contribution and, from it, samples a
+   joint uniform value in `[1, total_weight]`, finds which cube's block it
+   falls in, and looks up that cube's bits/mask (see the "Select cube"
+   section above). `main.cpp` calls the three underlying pieces
+   (`sample_in_range`/`select_cube_index`/`cube_at_index`) directly rather
+   than the composed `select_cube`, since it also wants to reveal the
+   intermediate sample/index, which `select_cube` doesn't return.
 
 `VARS`/`CUBES` (currently `4`/`2`, so `PRODUCT = CUBES*CUBES = 4`) are
 compile-time constants shared by both parties, not read from either file --
@@ -264,10 +299,9 @@ whatever's in the file.
 
 Everything above is revealed to both parties at the end. **That's not the
 final protocol** -- it's a placeholder so the whole pipeline can be
-smoke-tested end to end. A real circuit would consume the
-total/intervals/sample *privately* (e.g. a threshold check, or using the
-sample plus the interval boundaries to pick which cube's block a
-satisfying assignment comes from) instead of leaking them; expand
+smoke-tested end to end. A real circuit would consume all of it
+*privately* (e.g. a threshold check on the total, or actually using the
+selected cube's bits/mask for something) instead of leaking it; expand
 `main.cpp` once that's built.
 
 `alice.dnf` / `bob.dnf` at the project root are the bundled example
@@ -275,7 +309,10 @@ inputs (`VARS=4, CUBES=2`, matching `main.cpp`): Alice's DNF is `x1 ∨ ¬x2`,
 Bob's is `x1 ∨ x3`. Their conjunction's 4 cubes all turn out non-contradictory
 here (weights `8, 4, 4, 4` in cross-product order), giving `total_weight=20`
 and `intervals=[0,8,12,16,20]` (5 boundaries for 4 cubes; the last one, `20`,
-is the total weight). `sample` is a fresh draw in `[1,20]` every run.
+is the total weight). `sample` is a fresh draw in `[1,20]` every run, and
+`cube_index` (1-indexed, in `[1,4]`) is whichever of the 4 cubes its block
+landed in -- e.g. `sample=15` lands in cube `3` (`x1 ∧ ¬x2`, from `A1 ∧
+B0`), reported as `cube_bits=1000, cube_mask=1100`.
 
 ## Tests
 
@@ -332,7 +369,7 @@ a whole now needs emp-tool too.
   - `cube_weight.h` -- the per-cube satisfying-assignment-count gadget.
   - `dnf_weight.h` -- sums cube weights into the whole DNF's satisfying-assignment count.
   - `cube_intervals.h` -- the exclusive prefix sum of cube weights.
-  - `sample_cube.h` -- combines both parties' randomness into a joint sample in `[1, total_weight]`.
+  - `select_cube.h` -- samples a joint random value, then selects and looks up the cube it lands in.
 - `src/tests/` -- unit tests, all built into the single `run_tests` binary:
   - `run_tests.cpp` -- the shared `main()`; calls each suite below.
   - `dimacs_dnf_test.cpp` -- tests for `utils/dimacs_dnf.h`.
@@ -340,7 +377,7 @@ a whole now needs emp-tool too.
   - `cube_weight_test.cpp` -- tests for `gadgets/cube_weight.h` (`emp::ClearSession`-based, no network).
   - `dnf_weight_test.cpp` -- tests for `gadgets/dnf_weight.h` (`emp::ClearSession`-based, no network).
   - `cube_intervals_test.cpp` -- tests for `gadgets/cube_intervals.h` (`emp::ClearSession`-based, no network).
-  - `sample_cube_test.cpp` -- tests for `gadgets/sample_cube.h` (`emp::ClearSession`-based, no network).
+  - `select_cube_test.cpp` -- tests for `gadgets/select_cube.h` (`emp::ClearSession`-based, no network).
 - `sample.dnf` -- a standalone example DIMACS-DNF file (used by `dimacs_dnf_test.cpp`'s docs, not read by any binary).
 - `alice.dnf` / `bob.dnf` -- the two parties' example private inputs to `main.cpp`.
 - `run.sh` -- launches both parties of `sh2pc_demo` locally for a quick check.

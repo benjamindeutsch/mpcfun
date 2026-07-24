@@ -11,15 +11,17 @@
 //   4. computes the CUBES*CUBES+1 interval boundaries T_0..T_M over those
 //      weights (gadgets/cube_intervals.h), with T_M equal to the total
 //      from step 3, and
-//   5. samples a joint uniform random integer in [1, total_weight] (for
-//      later use picking which cube's block a satisfying assignment comes
-//      from, via the T_0..T_M boundaries -- not done yet).
+//   5. samples a joint uniform random integer z in [1, total_weight]
+//      (gadgets/select_cube.h's sample_in_range), picks the (1-indexed)
+//      cube whose block z falls in via the T_0..T_M boundaries
+//      (select_cube_index), and looks up that cube's bits/mask
+//      (cube_at_index) -- see main() for why these are called directly
+//      rather than through select_cube(), which only returns the cube.
 //
 // All of the above is revealed to both parties at the end. That's NOT the
 // final protocol -- it's a placeholder so the whole pipeline can be
-// smoke-tested end to end; a real circuit would consume the total/
-// intervals/sample privately instead of leaking them. Expand this once
-// that's built.
+// smoke-tested end to end; a real circuit would consume all of it
+// privately instead of leaking it. Expand this once that's built.
 //
 // VARS/CUBES are the fixed capacity every DNF gets padded/validated against
 // (see dimacs_dnf::parse) -- they're compile-time constants shared by both
@@ -42,7 +44,7 @@
 #include "gadgets/cube_weight.h"
 #include "gadgets/dnf_weight.h"
 #include "gadgets/cube_intervals.h"
-#include "gadgets/sample_cube.h"
+#include "gadgets/select_cube.h"
 
 #include <array>
 #include <cstddef>
@@ -123,21 +125,33 @@ int main(int argc, char** argv) {
     array<TotalWeight, PRODUCT + 1> intervals =
         cube_intervals<Ctx, VARS, PRODUCT>(weights);
 
-    // Joint uniform sample in [1, total_weight] (see gadgets/sample_cube.h
-    // for the wire-level math). Each party draws its own real-entropy
-    // random bits locally (PRG() defaults to system randomness, not a
-    // fixed seed) and feeds them in as private input -- that part is this
-    // session's job, not the gadget's, same as any other private input.
+    // Sample a joint random integer in [1, total_weight], find which cube
+    // it lands in (1-indexed), and look up that cube's bits/mask -- see
+    // gadgets/select_cube.h for the wire-level math. Each party draws its
+    // own real-entropy random bits locally (PRG() defaults to system
+    // randomness, not a fixed seed) and feeds them in as private input --
+    // that part is this session's job, not the gadget's, same as any
+    // other private input.
     using RandBits = SampleBits<Ctx, VARS, PRODUCT>;
     array<bool, (size_t)TotalWidth> my_random_bits{};
     PRG().random_bool(my_random_bits.data(), TotalWidth);
 
+    // select_cube() itself only returns the selected cube's bits/mask --
+    // since this demo also wants to show the intermediate sample/index for
+    // testing, it calls the granular sample_in_range/select_cube_index/
+    // cube_at_index pieces directly instead (equivalent to what select_cube
+    // does internally, just without discarding the intermediates).
     RandBits alice_r = sess.input<RandBits>(ALICE, my_random_bits);
     RandBits bob_r   = sess.input<RandBits>(BOB,   my_random_bits);
-    TotalWeight sample = sample_cube<Ctx, VARS, PRODUCT>(alice_r, bob_r, total);
+    TotalWeight sample = sample_in_range<Ctx, VARS, PRODUCT>(alice_r, bob_r, total);
+    CubeIndex<Ctx, PRODUCT> cube_index = select_cube_index<Ctx, VARS, PRODUCT>(sample, intervals);
+    CubeData<Ctx, VARS> selected = cube_at_index<Ctx, VARS, PRODUCT>(cube_index, conjunction);
 
     uint64_t total_out = sess.reveal(total, PUBLIC).value();
     uint64_t sample_out = sess.reveal(sample, PUBLIC).value();
+    uint64_t cube_index_out = sess.reveal(cube_index, PUBLIC).value();
+    array<bool, VARS> cube_bits_out = sess.reveal(selected.bits, PUBLIC).value();
+    array<bool, VARS> cube_mask_out = sess.reveal(selected.mask, PUBLIC).value();
     array<uint64_t, PRODUCT + 1> intervals_out{};
     for (int i = 0; i < PRODUCT + 1; ++i)
         intervals_out[(size_t)i] = sess.reveal(intervals[(size_t)i], PUBLIC).value();
@@ -148,7 +162,12 @@ int main(int argc, char** argv) {
               << " file=" << path
               << "  total_weight=" << total_out
               << "  sample=" << sample_out
-              << "  intervals=[";
+              << "  cube_index(1-indexed)=" << cube_index_out
+              << "  cube_bits=";
+    for (int i = 0; i < VARS; ++i) std::cout << (cube_bits_out[(size_t)i] ? '1' : '0');
+    std::cout << "  cube_mask=";
+    for (int i = 0; i < VARS; ++i) std::cout << (cube_mask_out[(size_t)i] ? '1' : '0');
+    std::cout << "  intervals=[";
     for (int i = 0; i < PRODUCT + 1; ++i) {
         if (i) std::cout << ",";
         std::cout << intervals_out[(size_t)i];
