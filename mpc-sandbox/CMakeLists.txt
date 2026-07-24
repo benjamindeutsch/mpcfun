@@ -62,6 +62,7 @@ add_executable(run_tests
     src/tests/cube_weight_test.cpp
     src/tests/dnf_weight_test.cpp
     src/tests/cube_intervals_test.cpp
+    src/tests/sample_cube_test.cpp
 )
 target_link_libraries(run_tests PRIVATE emp-tool::emp-tool)
 target_include_directories(run_tests PRIVATE ${MPC_SANDBOX_SRC_DIR})

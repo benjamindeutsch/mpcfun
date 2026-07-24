@@ -25,10 +25,12 @@ namespace gadgets {
 
 template <BooleanContext Ctx, int N, int M>
 DnfWeight<Ctx, N, M> dnf_weight(const array<CubeWeight<Ctx, N>, (size_t)M>& weights) {
-    constexpr int W = N + bits_for(M);
-    DnfWeight<Ctx, N, M> total = weights[0].template zext<W>();
+    using W = DnfWeight<Ctx, N, M>;
+    constexpr int OutWidth = W::width();
+
+    W total = weights[0].template zext<OutWidth>();
     for (size_t i = 1; i < (size_t)M; ++i)
-        total = total + weights[i].template zext<W>();
+        total = total + weights[i].template zext<OutWidth>();
     return total;
 }
 

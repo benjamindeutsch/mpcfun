@@ -1,15 +1,15 @@
 # mpc-sandbox
 
-Minimal two-party garbled-circuit sanity check built on
+A two-party garbled-circuit pipeline for DNF intersection counting, built on
 [emp-toolkit](https://github.com/emp-toolkit) (`emp-tool` + `emp-ot` +
-`emp-sh2pc`, semi-honest 2PC). Not related to any real MPC protocol logic --
-it just proves the whole pipeline (garbling, OT, network setup, evaluation,
-output reveal) works end to end before building anything real on top of it.
-
-Alice and Bob each hold a private 32-bit bitstring; the circuit reveals
-bitwise AND, OR, XOR, NOT (of Alice's bits), and equality to both parties.
-Everything is over `emp::BitVec_T` -- pure logical wires, no `UInt_T`
-arithmetic anywhere.
+`emp-sh2pc`, semi-honest 2PC). Alice and Bob each hold a private DNF formula
+(as a DIMACS-style file); the circuit computes the cubes of the two DNFs'
+conjunction, each cube's satisfying-assignment count, both the total count
+and the per-cube exclusive prefix sum over those counts, and a joint
+uniform random sample in `[1, total_weight]` -- currently revealing all of
+that to both parties, purely so the pipeline can be smoke-tested end to end
+(see "Putting it together" below for what that means and what's still a
+placeholder).
 
 ## Prerequisites
 
@@ -38,29 +38,34 @@ emp-sh2pc's own tests are structured).
 ## Run
 
 ```sh
-./build/sh2pc_demo <party: 1=ALICE, 2=BOB> <secret-32-bit-string>
+./build/sh2pc_demo <party: 1=ALICE, 2=BOB> <path-to-dimacs-dnf-file>
 ```
 
-The bitstring must be exactly 32 characters of `0`/`1`.
+The file is each party's own private DNF (see "DIMACS-DNF cube parser"
+below for the format) -- it must fit `main.cpp`'s compile-time `VARS`/
+`CUBES` capacity (currently `VARS=4, CUBES=2`).
 
 Two terminals:
 
 ```sh
 # terminal 1
-./build/sh2pc_demo 1 11001100110011001100110011001100
+./build/sh2pc_demo 1 alice.dnf
 
 # terminal 2
-./build/sh2pc_demo 2 10101010101010101010101010101010
+./build/sh2pc_demo 2 bob.dnf
 ```
 
-Or both at once via the helper script (`./run.sh <alice-bits> <bob-bits>`,
-both args optional):
+Or both at once via the helper script (`./run.sh <alice-file> <bob-file>`,
+both args optional -- default to the bundled `alice.dnf`/`bob.dnf`):
 
 ```sh
 ./run.sh
-# [alice] my bits=11001100110011001100110011001100  AND=10001000100010001000100010001000  OR=11101110111011101110111011101110  XOR=01100110011001100110011001100110  NOT(a)=00110011001100110011001100110011  a==b=false
-# [bob]   my bits=10101010101010101010101010101010  AND=10001000100010001000100010001000  OR=11101110111011101110111011101110  XOR=01100110011001100110011001100110  NOT(a)=00110011001100110011001100110011  a==b=false
+# [alice] file=alice.dnf  total_weight=20  sample=15  intervals=[0,8,12,16,20]
+# [bob]   file=bob.dnf  total_weight=20  sample=15  intervals=[0,8,12,16,20]
 ```
+
+(`sample` is a fresh joint-random draw in `[1, total_weight]` each run --
+both parties always agree on it, but it varies run to run.)
 
 Alice listens on a fixed localhost port (default `12345`); Bob connects to
 it. Override with the `EMP_PORT` (port) and `EMP_PEER_IP` (Bob's target
@@ -97,7 +102,7 @@ path. Its own code stays pure stdlib -- no emp-tool -- same as the parser
 itself; only the shared test binary it's built into links emp-tool, for the
 other suite's sake.
 
-(`sample.dnf.cnf` at the project root is a standalone example of the file
+(`sample.dnf` at the project root is a standalone example of the file
 format -- 5 vars / 3 cubes: cube 0 is `x1 ∧ ¬x3 ∧ x5`, cube 1 is `¬x2 ∧ x4`,
 cube 2 is the empty cube, always true. The test above embeds the same
 content inline rather than reading that file, so it isn't tied to a
@@ -108,10 +113,11 @@ particular working directory.)
 `src/gadgets/circuit_cube.h` defines `CircuitCube<Ctx,N>{bits, mask, pad}`,
 the same fields as `dimacs_dnf::Cube` but as wires
 (`emp::BitVec_T<Ctx,N>`/`emp::Bit_T<Ctx>`) instead of `vector<bool>`/`bool`,
-plus the `CubeWeight<Ctx,N>` alias used by `cube_weight.h`/`dnf_weight.h`.
-Both are shared foundational types, not specific to any one gadget -- they
-live in their own file (rather than, say, inside `dnf_distribute.h` or
-`cube_weight.h`) for exactly that reason.
+plus the `CubeWeight<Ctx,N>` and `DnfWeight<Ctx,N,M>` aliases used by
+`cube_weight.h`/`dnf_weight.h`/`cube_intervals.h`/`sample_cube.h`. All
+three are shared foundational types, not specific to any one gadget --
+they live in their own file (rather than inside whichever gadget happened
+to need them first) for exactly that reason.
 
 `src/gadgets/dnf_distribute.h`'s `conjoin`/`conjoin_dnf` use `CircuitCube`
 for both inputs and outputs -- there's no separate "result" type, since a
@@ -189,21 +195,87 @@ including summing the exact four cubes from `cube_weight_test.cpp`
 ### Cube intervals
 
 `src/gadgets/cube_intervals.h` takes the same `std::array<CubeWeight<Ctx,N>,
-M>` and computes its `M`-element *exclusive prefix sum*:
-`intervals[0] = 0`, `intervals[i+1] = intervals[i] + weights[i]`.
-`intervals[i]` is the total weight of every cube before `i` -- the starting
-offset of cube `i`'s own block in a running enumeration of satisfying
-assignments (useful for, e.g., mapping a random index into which cube it
-falls in). The output stays length `M`, not `M+1`: `weights[M-1]` never
-gets added to anything here, since there's no `intervals[M]` slot for that
-sum -- `dnf_weight` computes the grand total separately, if that's what's
-needed. Reuses `dnf_weight.h`'s `DnfWeight<Ctx,N,M>` as the element type,
-since an exclusive prefix sum is a subset of the same summation.
+M>` and computes the `M+1` interval boundaries `T_0..T_M`: `T_0 = 0`,
+`T_{i+1} = T_i + weights[i]`. `T_i` is the total weight of every cube
+before `i` -- the starting offset of cube `i`'s own block in a running
+enumeration of satisfying assignments (useful for, e.g., mapping a random
+index into which cube it falls in). `T_M`, the last boundary, is the total
+weight of all `M` cubes -- exactly `dnf_weight`'s result. Reuses
+`circuit_cube.h`'s `DnfWeight<Ctx,N,M>` as the element type (same as
+`dnf_weight`'s own return type), since this is a superset of the same
+summation.
 
 Also tested via `emp::ClearSession` in `src/tests/cube_intervals_test.cpp`,
 including the exact cube_weight/dnf_weight test cases: weights `[16,1,8,0]`
--> intervals `[0,16,17,25]`, and weights `[4,8,1,1]` -> intervals
-`[0,4,12,13]`.
+-> intervals `[0,16,17,25,25]`, and weights `[4,8,1,1]` -> intervals
+`[0,4,12,13,14]` (both `T_M` values matching the corresponding
+`dnf_weight_test.cpp` totals: `25` and `14`).
+
+### Sample cube
+
+`src/gadgets/sample_cube.h` combines the two parties' random contributions
+into a joint uniform sample in `[1, total_weight]`: `sample_cube(alice_r,
+bob_r, total)` computes `(alice_r ^ bob_r).as_uint() % total`, then `+1`.
+The `^` is a free-XOR coin flip -- uniform as long as *either* contribution
+is honestly random, regardless of what the other party supplies -- so this
+gadget only does that wire-level combination; drawing the actual random
+bits (real entropy, not a fixed seed) and feeding them in as private input
+is the caller's job, same as any other private input, so the gadget stays
+pure `Ctx`-generic math like every other one here (and stays testable via
+`emp::ClearSession`, which can't demonstrate the randomness property but
+can check the arithmetic). Assumes `total > 0` (the conjunction has at
+least one satisfiable cube) -- mod-by-zero otherwise. `SampleBits<Ctx,N,M>`
+is the contribution type -- a `BitVec_T` matching `DnfWeight<Ctx,N,M>`'s
+own width, so the XOR result reinterprets as one for free.
+
+More is coming here (name's not fully justified yet): the next step is
+picking *which* cube the sample lands in, via the `cube_intervals.h`
+boundaries.
+
+Also tested via `emp::ClearSession` in `src/tests/sample_cube_test.cpp`,
+checking the arithmetic against hand-computed cases (a basic case, wrapping
+above `total`, the minimum/maximum possible sample, and both contributions
+nonzero).
+
+## Putting it together
+
+`src/main.cpp` is the two-party pipeline: each party's private input is a
+path to its own DIMACS-DNF file. Parsing (`dimacs_dnf::parse<VARS,CUBES>`)
+happens locally, in the clear, before either party touches the network --
+it's data prep, not a circuit. The parsed cubes then become each party's
+private input to the circuit, which:
+
+1. builds `CircuitCube<Ctx,VARS>` inputs for both parties' `CUBES` cubes,
+2. computes the `CUBES*CUBES` cubes of their conjunction (`conjoin_dnf`),
+3. computes each result's weight (`cube_weights`),
+4. sums those into the conjunction's total satisfying-assignment count
+   (`dnf_weight`),
+5. computes the `CUBES*CUBES+1` interval boundaries over the weights
+   (`cube_intervals`), and
+6. draws each party's local random contribution and combines them into a
+   joint uniform sample in `[1, total_weight]` (`sample_cube` -- see its
+   section above for how).
+
+`VARS`/`CUBES` (currently `4`/`2`, so `PRODUCT = CUBES*CUBES = 4`) are
+compile-time constants shared by both parties, not read from either file --
+the circuit's size has to be public in MPC, which is the whole reason
+`dimacs_dnf::parse` pads to a fixed capacity instead of just sizing to
+whatever's in the file.
+
+Everything above is revealed to both parties at the end. **That's not the
+final protocol** -- it's a placeholder so the whole pipeline can be
+smoke-tested end to end. A real circuit would consume the
+total/intervals/sample *privately* (e.g. a threshold check, or using the
+sample plus the interval boundaries to pick which cube's block a
+satisfying assignment comes from) instead of leaking them; expand
+`main.cpp` once that's built.
+
+`alice.dnf` / `bob.dnf` at the project root are the bundled example
+inputs (`VARS=4, CUBES=2`, matching `main.cpp`): Alice's DNF is `x1 ∨ ¬x2`,
+Bob's is `x1 ∨ x3`. Their conjunction's 4 cubes all turn out non-contradictory
+here (weights `8, 4, 4, 4` in cross-product order), giving `total_weight=20`
+and `intervals=[0,8,12,16,20]` (5 boundaries for 4 cubes; the last one, `20`,
+is the total weight). `sample` is a fresh draw in `[1,20]` every run.
 
 ## Tests
 
@@ -251,15 +323,16 @@ a whole now needs emp-tool too.
 ## Layout
 
 - `CMakeLists.txt` -- finds/links `emp-tool`, `emp-ot`, `emp-sh2pc`, OpenSSL, GMP.
-- `src/main.cpp` -- the two-party AND/OR/XOR/NOT/equality demo.
+- `src/main.cpp` -- the two-party DNF-intersection-counting pipeline (see "Putting it together").
 - `src/utils/` -- data-prep helpers with no emp-tool dependency:
   - `dimacs_dnf.h` -- the DIMACS-DNF cube parser (header-only: `parse<VARS,CUBES>` is a template).
 - `src/gadgets/` -- Ctx-generic circuit gadgets, reusable across sessions:
-  - `circuit_cube.h` -- `CircuitCube` and `CubeWeight`, the shared wire-level types.
+  - `circuit_cube.h` -- `CircuitCube`, `CubeWeight`, `DnfWeight`: the shared wire-level types.
   - `dnf_distribute.h` -- the DNF-cube conjunction gadget.
   - `cube_weight.h` -- the per-cube satisfying-assignment-count gadget.
   - `dnf_weight.h` -- sums cube weights into the whole DNF's satisfying-assignment count.
   - `cube_intervals.h` -- the exclusive prefix sum of cube weights.
+  - `sample_cube.h` -- combines both parties' randomness into a joint sample in `[1, total_weight]`.
 - `src/tests/` -- unit tests, all built into the single `run_tests` binary:
   - `run_tests.cpp` -- the shared `main()`; calls each suite below.
   - `dimacs_dnf_test.cpp` -- tests for `utils/dimacs_dnf.h`.
@@ -267,5 +340,7 @@ a whole now needs emp-tool too.
   - `cube_weight_test.cpp` -- tests for `gadgets/cube_weight.h` (`emp::ClearSession`-based, no network).
   - `dnf_weight_test.cpp` -- tests for `gadgets/dnf_weight.h` (`emp::ClearSession`-based, no network).
   - `cube_intervals_test.cpp` -- tests for `gadgets/cube_intervals.h` (`emp::ClearSession`-based, no network).
-- `sample.dnf.cnf` -- a standalone example DIMACS-DNF file.
-- `run.sh` -- launches both parties locally for a quick check.
+  - `sample_cube_test.cpp` -- tests for `gadgets/sample_cube.h` (`emp::ClearSession`-based, no network).
+- `sample.dnf` -- a standalone example DIMACS-DNF file (used by `dimacs_dnf_test.cpp`'s docs, not read by any binary).
+- `alice.dnf` / `bob.dnf` -- the two parties' example private inputs to `main.cpp`.
+- `run.sh` -- launches both parties of `sh2pc_demo` locally for a quick check.

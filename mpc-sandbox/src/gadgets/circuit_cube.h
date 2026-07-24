@@ -11,11 +11,13 @@
 #pragma once
 
 #include "emp-tool/circuits/typed.h"
+#include "emp-tool/circuits/numeric_kernels.h"
 
 using emp::BitVec_T;
 using emp::Bit_T;
 using emp::UInt_T;
 using emp::BooleanContext;
+using emp::kernel::bits_for;
 
 namespace gadgets {
 

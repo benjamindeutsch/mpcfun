@@ -1,0 +1,6 @@
+c Alice's private DNF for the main.cpp two-party pipeline demo.
+c VARS=4, CUBES=2 (must match main.cpp's compile-time constants).
+c Cube 0: x1. Cube 1: ~x2.
+p dnf 4 2
+1 0
+-2 0

@@ -39,11 +39,11 @@ CircuitCube<Ctx, N> make_cube(ClearSession& sess, const char* bits, const char* 
 template <int M>
 void check(ClearSession& sess, const char* name,
            const std::array<CircuitCube<Ctx, N>, M>& cubes,
-           const std::array<uint64_t, M>& expect) {
+           const std::array<uint64_t, M + 1>& expect) {
     std::array<CubeWeight<Ctx, N>, M> weights = cube_weights<Ctx, N, M>(cubes);
-    std::array<DnfWeight<Ctx, N, M>, M> intervals = cube_intervals<Ctx, N, M>(weights);
+    std::array<DnfWeight<Ctx, N, M>, M + 1> intervals = cube_intervals<Ctx, N, M>(weights);
 
-    for (int i = 0; i < M; ++i) {
+    for (int i = 0; i < M + 1; ++i) {
         uint64_t got = sess.reveal(intervals[(std::size_t)i], PUBLIC).value();
         if (got != expect[(std::size_t)i]) {
             std::fprintf(stderr, "FAIL %s (intervals[%d]: got %llu, expected %llu)\n", name, i,
@@ -60,30 +60,30 @@ int run_cube_intervals_tests() {
     ClearSession sess;
 
     // Weights [16, 1, 8, 0] (the exact cubes from cube_weight_test.cpp) ->
-    // intervals[0]=0, [1]=0+16=16, [2]=16+1=17, [3]=17+8=25. The last
-    // weight (0, the padding cube) is never added to anything, since
-    // there's no intervals[4] slot.
-    check<4>(sess, "empty+full+single+padding: intervals = [0,16,17,25]",
+    // T_0=0, T_1=0+16=16, T_2=16+1=17, T_3=17+8=25, T_4=25+0=25. T_4, the
+    // last boundary, equals the total weight (matches
+    // dnf_weight_test.cpp's "empty+full+single+padding" case: 25).
+    check<4>(sess, "empty+full+single+padding: intervals = [0,16,17,25,25]",
               {make_cube(sess, "0000", "0000"),                 // r=0 -> 16
                make_cube(sess, "1010", "1111"),                 // r=4 -> 1
                make_cube(sess, "0100", "0100"),                 // r=1 -> 8
                make_cube(sess, "1111", "0000", /*pad=*/true)},  // padding -> 0
-              {0, 16, 17, 25});
+              {0, 16, 17, 25, 25});
 
     // Weights [4, 8, 1, 1] (the exact cubes from dnf_weight_test.cpp's
-    // "four ordinary cubes" case) -> intervals[0]=0, [1]=4, [2]=12, [3]=13.
-    check<4>(sess, "four ordinary cubes: intervals = [0,4,12,13]",
+    // "four ordinary cubes" case) -> T_0=0, T_1=4, T_2=12, T_3=13, T_4=14
+    // (matches that test's total: 14).
+    check<4>(sess, "four ordinary cubes: intervals = [0,4,12,13,14]",
               {make_cube(sess, "1000", "1010"),   // r=2 -> 4
                make_cube(sess, "0100", "0100"),   // r=1 -> 8
                make_cube(sess, "1111", "1111"),   // r=4 -> 1
                make_cube(sess, "0000", "1111")},  // r=4 -> 1
-              {0, 4, 12, 13});
+              {0, 4, 12, 13, 14});
 
-    // A single cube: intervals = [0] (nothing before it, and no slot to
-    // fold its own weight into).
-    check<1>(sess, "single cube: intervals = [0]",
+    // A single cube: intervals = [0, its own weight].
+    check<1>(sess, "single cube: intervals = [0,16]",
               {make_cube(sess, "0000", "0000")},
-              {0});
+              {0, 16});
 
     std::printf("cube_intervals_test: all checks passed\n");
     return 0;
