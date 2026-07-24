@@ -52,21 +52,21 @@ target_include_directories(sh2pc_demo PRIVATE ${GMP_INCLUDE_DIR} ${MPC_SANDBOX_S
 # exposes a run_*_tests() called from run_tests.cpp's main(), so a new test
 # file only needs adding to this source list + a declaration+call in
 # run_tests.cpp, not a whole new executable target. dnf_distribute_test.cpp
-# needs emp-tool (it drives gadgets/dnf_distribute.h through
+# needs emp-tool (it drives gadgets/dnf/dnf_distribute.h through
 # emp::ClearSession); dimacs_dnf_test.cpp doesn't, but sharing one binary
 # means it now links emp-tool too -- the trade-off for a single executable.
 add_executable(run_tests
     src/tests/run_tests.cpp
     src/tests/dimacs_dnf_test.cpp
-    src/tests/dnf_distribute_test.cpp
-    src/tests/cube_weight_test.cpp
-    src/tests/dnf_weight_test.cpp
-    src/tests/cube_intervals_test.cpp
-    src/tests/select_cube_test.cpp
-    src/tests/random_assignment_test.cpp
-    src/tests/count_satisfied_cubes_test.cpp
-    src/tests/divide_lookup_test.cpp
-    src/tests/karp_luby_estimate_test.cpp
+    src/tests/dnf/dnf_distribute_test.cpp
+    src/tests/dnf/cube_weight_test.cpp
+    src/tests/dnf/dnf_weight_test.cpp
+    src/tests/dnf/cube_intervals_test.cpp
+    src/tests/karp_luby/select_cube_test.cpp
+    src/tests/karp_luby/random_assignment_test.cpp
+    src/tests/karp_luby/count_satisfied_cubes_test.cpp
+    src/tests/karp_luby/divide_lookup_test.cpp
+    src/tests/karp_luby/karp_luby_estimate_test.cpp
 )
 target_link_libraries(run_tests PRIVATE emp-tool::emp-tool)
 target_include_directories(run_tests PRIVATE ${MPC_SANDBOX_SRC_DIR})

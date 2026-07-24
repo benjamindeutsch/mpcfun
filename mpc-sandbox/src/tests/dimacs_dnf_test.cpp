@@ -7,6 +7,7 @@
 // single entry point for every *_test.cpp under tests/ -- see that file.
 
 #include "utils/dimacs_dnf.h"
+#include "tests/bits_of.h"
 
 #include <array>
 #include <cstdio>
@@ -16,13 +17,6 @@
 #include <string>
 
 namespace {
-
-template <int N>
-std::array<bool, N> bits_of(const char* s) {
-    std::array<bool, N> b{};
-    for (int i = 0; i < N; ++i) b[(std::size_t)i] = (s[i] == '1');
-    return b;
-}
 
 std::filesystem::path write_temp(const std::string& name, const std::string& content) {
     std::filesystem::path p = std::filesystem::temp_directory_path() / ("dimacs_dnf_test_" + name + ".cnf");

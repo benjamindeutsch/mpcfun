@@ -7,23 +7,15 @@
 // DNF's satisfying assignments from its (disjoint) cubes.
 //
 // Ctx-generic like gadgets/circuit_cube.h, for the same reason: testable
-// under ClearSession (see tests/cube_weight_test.cpp) with zero
+// under ClearSession (see tests/dnf/cube_weight_test.cpp) with zero
 // changes needed to later run under the real SH2PCSession protocol.
 
 #pragma once
 
 #include "gadgets/circuit_cube.h"
-#include "emp-tool/circuits/typed.h"
+#include "gadgets/common.h"
 
-#include <array>
-#include <cstddef>
 #include <cstdint>
-
-using std::array;
-using std::size_t;
-using emp::BitVec_T;
-using emp::UInt_T;
-using emp::BooleanContext;
 
 namespace gadgets {
 

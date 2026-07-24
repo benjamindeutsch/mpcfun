@@ -12,23 +12,13 @@
 //
 // Ctx-generic (any BooleanContext), not tied to a specific session: the
 // same code type-checks under ClearSession (plaintext, for fast gadget
-// unit tests -- see tests/count_satisfied_cubes_test.cpp) and
+// unit tests -- see tests/karp_luby/count_satisfied_cubes_test.cpp) and
 // SH2PCSession (the real 2PC protocol) unchanged.
 
 #pragma once
 
 #include "gadgets/circuit_cube.h"
-#include "emp-tool/circuits/typed.h"
-
-#include <array>
-#include <cstddef>
-
-using std::array;
-using std::size_t;
-using emp::BitVec_T;
-using emp::Bit_T;
-using emp::UInt_T;
-using emp::BooleanContext;
+#include "gadgets/common.h"
 
 namespace gadgets {
 
@@ -42,12 +32,10 @@ SatisfiedCount<Ctx, M> count_satisfied_cubes(const BitVec_T<Ctx, N>& assignment,
     using Count = SatisfiedCount<Ctx, M>;
     Ctx& ctx = *assignment.context();
 
-    Count zero = Count::constant(ctx, 0);
-    Count one  = Count::constant(ctx, 1);
-    Count count = zero;
+    Count count = Count::constant(ctx, 0);
     for (size_t i = 0; i < (size_t)M; ++i) {
         Bit_T<Ctx> satisfied = (assignment & cubes[i].mask) == cubes[i].bits;
-        count = count + zero.select(satisfied, one);  // satisfied ? 1 : 0
+        count = count + indicator<Count>(ctx, satisfied);
     }
     return count;
 }

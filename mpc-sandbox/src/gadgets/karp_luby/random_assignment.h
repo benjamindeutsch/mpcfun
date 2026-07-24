@@ -2,7 +2,7 @@
 // satisfying assignment over all N variables. Variables the cube
 // constrains (mask=1) keep the cube's own value; variables it leaves free
 // (mask=0) are filled in with the joint random bitstring r = alice_r ^
-// bob_r -- the same free-XOR coin flip as gadgets/select_cube.h's
+// bob_r -- the same free-XOR coin flip as gadgets/karp_luby/select_cube.h's
 // sample_in_range (uniform as long as at least one contribution is
 // honestly random, regardless of what the other party supplies), so if r
 // is uniform, the result is a uniformly random assignment satisfying the
@@ -16,16 +16,13 @@
 //
 // Ctx-generic (any BooleanContext), not tied to a specific session: the
 // same code type-checks under ClearSession (plaintext, for fast gadget
-// unit tests -- see tests/random_assignment_test.cpp) and SH2PCSession
-// (the real 2PC protocol) unchanged.
+// unit tests -- see tests/karp_luby/random_assignment_test.cpp) and
+// SH2PCSession (the real 2PC protocol) unchanged.
 
 #pragma once
 
 #include "gadgets/circuit_cube.h"
-#include "emp-tool/circuits/typed.h"
-
-using emp::BitVec_T;
-using emp::BooleanContext;
+#include "gadgets/common.h"
 
 namespace gadgets {
 

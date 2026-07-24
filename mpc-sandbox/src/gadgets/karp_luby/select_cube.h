@@ -3,7 +3,7 @@
 // composed from three separately testable pieces:
 //   1. sample_in_range(alice_r, bob_r, total) -- the joint random sample.
 //   2. select_cube_index(z, intervals) -- which cube (1-indexed) it lands
-//      in, via the gadgets/cube_intervals.h boundaries.
+//      in, via the gadgets/dnf/cube_intervals.h boundaries.
 //   3. cube_at_index(index, cubes) -- an oblivious lookup of that cube's
 //      bits/mask out of the full array.
 //
@@ -14,24 +14,15 @@
 //
 // Ctx-generic (any BooleanContext), not tied to a specific session: the
 // same code type-checks under ClearSession (plaintext, for fast gadget
-// unit tests -- see tests/select_cube_test.cpp) and SH2PCSession (the real
-// 2PC protocol) unchanged.
+// unit tests -- see tests/karp_luby/select_cube_test.cpp) and SH2PCSession
+// (the real 2PC protocol) unchanged.
 
 #pragma once
 
 #include "gadgets/circuit_cube.h"
-#include "emp-tool/circuits/typed.h"
+#include "gadgets/common.h"
 
-#include <array>
-#include <cstddef>
 #include <cstdint>
-
-using std::array;
-using std::size_t;
-using emp::BitVec_T;
-using emp::Bit_T;
-using emp::UInt_T;
-using emp::BooleanContext;
 
 namespace gadgets {
 
@@ -75,13 +66,9 @@ CubeIndex<Ctx, M> select_cube_index(const DnfWeight<Ctx, N, M>& z,
     using Idx = CubeIndex<Ctx, M>;
     Ctx& ctx = *z.context();
 
-    Idx zero = Idx::constant(ctx, 0);
-    Idx one  = Idx::constant(ctx, 1);
-    Idx count = zero;
-    for (size_t i = 0; i < (size_t)M + 1; ++i) {
-        Bit_T<Ctx> gt = z > intervals[i];
-        count = count + zero.select(gt, one);  // gt ? 1 : 0
-    }
+    Idx count = Idx::constant(ctx, 0);
+    for (size_t i = 0; i < (size_t)M + 1; ++i)
+        count = count + indicator<Idx>(ctx, z > intervals[i]);
     return count;
 }
 

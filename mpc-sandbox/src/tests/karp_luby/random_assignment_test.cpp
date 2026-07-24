@@ -1,12 +1,13 @@
-// Unit tests for gadgets/random_assignment.h, run entirely in the clear via
-// emp::ClearSession: no OT, no network, no garbling, single process --
-// same approach as select_cube_test.cpp.
+// Unit tests for gadgets/karp_luby/random_assignment.h, run entirely in the
+// clear via emp::ClearSession: no OT, no network, no garbling, single
+// process -- same approach as select_cube_test.cpp.
 //
 // run_random_assignment_tests() is called from tests/run_tests.cpp's
 // main(), the single entry point for every *_test.cpp under tests/ -- see
 // that file.
 
-#include "gadgets/random_assignment.h"
+#include "gadgets/karp_luby/random_assignment.h"
+#include "tests/bits_of.h"
 #include "emp-tool/ir/session/clear_session.h"
 
 #include <array>
@@ -22,23 +23,17 @@ constexpr int N = 4;
 using Ctx = ClearSession::ctx_t;
 using BV  = BitVec_T<Ctx, N>;
 
-std::array<bool, N> bits_of(const char* s) {
-    std::array<bool, N> b{};
-    for (int i = 0; i < N; ++i) b[(std::size_t)i] = (s[i] == '1');
-    return b;
-}
-
 void check(ClearSession& sess, const char* name, const char* cube_bits, const char* cube_mask,
            const char* alice_r, const char* bob_r, const char* expect) {
     CubeData<Ctx, N> cube{
-        sess.input<BV>(PUBLIC, bits_of(cube_bits)),
-        sess.input<BV>(PUBLIC, bits_of(cube_mask)),
+        sess.input<BV>(PUBLIC, bits_of<N>(cube_bits)),
+        sess.input<BV>(PUBLIC, bits_of<N>(cube_mask)),
     };
-    BV a = sess.input<BV>(PUBLIC, bits_of(alice_r));
-    BV b = sess.input<BV>(PUBLIC, bits_of(bob_r));
+    BV a = sess.input<BV>(PUBLIC, bits_of<N>(alice_r));
+    BV b = sess.input<BV>(PUBLIC, bits_of<N>(bob_r));
 
     std::array<bool, N> got = sess.reveal(random_assignment<Ctx, N>(cube, a, b), PUBLIC).value();
-    if (got != bits_of(expect)) {
+    if (got != bits_of<N>(expect)) {
         std::fprintf(stderr, "FAIL %s\n", name);
         std::exit(1);
     }

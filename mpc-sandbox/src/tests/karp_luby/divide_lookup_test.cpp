@@ -1,12 +1,12 @@
-// Unit tests for gadgets/divide_lookup.h, run entirely in the clear via
-// emp::ClearSession: no OT, no network, no garbling, single process --
-// same approach as select_cube_test.cpp.
+// Unit tests for gadgets/karp_luby/divide_lookup.h, run entirely in the
+// clear via emp::ClearSession: no OT, no network, no garbling, single
+// process -- same approach as select_cube_test.cpp.
 //
 // run_divide_lookup_tests() is called from tests/run_tests.cpp's main(),
 // the single entry point for every *_test.cpp under tests/ -- see that
 // file.
 
-#include "gadgets/divide_lookup.h"
+#include "gadgets/karp_luby/divide_lookup.h"
 #include "emp-tool/ir/session/clear_session.h"
 
 #include <cstdio>

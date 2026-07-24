@@ -6,31 +6,27 @@
 // error). The table itself is PUBLIC constants (free -- no OT/garbling for
 // those); only the O(M) equality comparisons that obliviously select
 // table[index] cost real gates, the same linear-scan pattern
-// gadgets/select_cube.h's cube_at_index uses to look up a cube by secret
-// index. That's much cheaper than a real division circuit
+// gadgets/karp_luby/select_cube.h's cube_at_index uses to look up a cube by
+// secret index. That's much cheaper than a real division circuit
 // (kernel::div_full's restoring-division algorithm) for the small M this
 // pipeline uses.
 //
 // lookup_scale<M>() is public API: callers un-scale a revealed result by
 // dividing by it in plaintext (SCALE is a compile-time public constant,
 // so that division costs nothing in the circuit) -- see
-// gadgets/karp_luby_estimate.h.
+// gadgets/karp_luby/karp_luby_estimate.h.
 //
 // Ctx-generic (any BooleanContext), not tied to a specific session: the
 // same code type-checks under ClearSession (plaintext, for fast gadget
-// unit tests -- see tests/divide_lookup_test.cpp) and SH2PCSession (the
-// real 2PC protocol) unchanged.
+// unit tests -- see tests/karp_luby/divide_lookup_test.cpp) and
+// SH2PCSession (the real 2PC protocol) unchanged.
 
 #pragma once
 
-#include "gadgets/count_satisfied_cubes.h"
-#include "emp-tool/circuits/typed.h"
+#include "gadgets/karp_luby/count_satisfied_cubes.h"
+#include "gadgets/common.h"
 
 #include <cstdint>
-
-using emp::Bit_T;
-using emp::UInt_T;
-using emp::BooleanContext;
 
 namespace gadgets {
 
@@ -50,8 +46,9 @@ template <BooleanContext Ctx, int M>
 using DivideLookupResult = UInt_T<Ctx, bits_for((int)lookup_scale<M>())>;
 
 // table[index-1] = SCALE/index, for a 1-indexed index in [1,M] -- matching
-// gadgets/count_satisfied_cubes.h's SatisfiedCount, which is always >= 1
-// (an assignment satisfies at least the cube it was built from).
+// gadgets/karp_luby/count_satisfied_cubes.h's SatisfiedCount, which is
+// always >= 1 (an assignment satisfies at least the cube it was built
+// from).
 template <BooleanContext Ctx, int M>
 DivideLookupResult<Ctx, M> divide_lookup(const SatisfiedCount<Ctx, M>& index) {
     using Result = DivideLookupResult<Ctx, M>;

@@ -107,7 +107,7 @@ a party's real DNF actually has -- padding to a fixed public size is the
 usual way to do that in MPC. Being a template (so it can be instantiated at
 whatever `VARS`/`CUBES` a caller needs) is also why `parse` is defined
 directly in the header with no companion `.cpp`, for the same reason as
-`gadgets/dnf_distribute.h` (see its file for the fuller explanation).
+`gadgets/dnf/dnf_distribute.h` (see its file for the fuller explanation).
 
 `src/tests/dimacs_dnf_test.cpp` is its unit test (run via `build/run_tests`,
 see "Tests" below): writes small DIMACS-DNF snippets to temp files and
@@ -133,8 +133,16 @@ by more than one gadget (`cube_weight.h`/`dnf_weight.h`/
 `cube_intervals.h`/`select_cube.h`/`random_assignment.h`/
 `karp_luby_estimate.h`) -- they live in their own file (rather than inside
 whichever gadget happened to need them first) for exactly that reason.
+`src/gadgets/common.h` is the analogous shared file for boilerplate rather
+than types: the `using` declarations (`BitVec_T`, `Bit_T`, `array`, etc.)
+every gadget needs, plus `zext_to<W>(v)` and `indicator<Count>(ctx, cond)`
+-- two small helpers factored out of patterns that used to be reimplemented
+in multiple gadgets (see `dnf/dnf_weight.h`, `dnf/cube_intervals.h`, and
+`karp_luby/karp_luby_estimate.h` for `zext_to`; `karp_luby/select_cube.h`'s
+`select_cube_index` and `karp_luby/count_satisfied_cubes.h` for
+`indicator`).
 
-`src/gadgets/dnf_distribute.h`'s `conjoin`/`conjoin_dnf` use `CircuitCube`
+`src/gadgets/dnf/dnf_distribute.h`'s `conjoin`/`conjoin_dnf` use `CircuitCube`
 for both inputs and outputs -- there's no separate "result" type, since a
 conjunction's output has the same shape as an input (and can itself be
 conjoined further).
@@ -159,7 +167,7 @@ a runtime-resizable container is actually needed.
 
 Both functions are templated over `Ctx` (any `emp::BooleanContext`), not
 tied to a specific session -- that's what makes this a separately testable
-unit. `src/tests/dnf_distribute_test.cpp` drives it through
+unit. `src/tests/dnf/dnf_distribute_test.cpp` drives it through
 `emp::ClearSession` (plaintext: no OT, no network, no garbling, single
 process) and checks it against hand-computed cases.
 
@@ -170,7 +178,7 @@ through these functions, and `sess.reveal(...)` the results.
 
 ### Cube weight
 
-`src/gadgets/cube_weight.h` computes a cube's *weight*: the number of full
+`src/gadgets/dnf/cube_weight.h` computes a cube's *weight*: the number of full
 assignments over `VARS` (`=N`) variables that satisfy it. A cube fixes
 `r = popcount(mask)` variables and leaves the other `VARS-r` free, so it's
 satisfied by exactly `2^(VARS-r)` of the `2^VARS` possible assignments --
@@ -188,11 +196,11 @@ weight `2^N`, same as a genuine empty cube, which is wrong: a padding cube
 isn't a real disjunct and must not contribute to a sum of weights across a
 DNF.
 
-Also tested via `emp::ClearSession` in `src/tests/cube_weight_test.cpp`.
+Also tested via `emp::ClearSession` in `src/tests/dnf/cube_weight_test.cpp`.
 
 ### DNF weight
 
-`src/gadgets/dnf_weight.h` sums an array of `CubeWeight<Ctx,N>` terms into a
+`src/gadgets/dnf/dnf_weight.h` sums an array of `CubeWeight<Ctx,N>` terms into a
 single total -- the whole DNF's satisfying-assignment count, provided its
 cubes are pairwise disjoint (true of a correctly-built cube cover; padding
 cubes contribute `0` via `cube_weight`, so they don't skew the sum either).
@@ -203,13 +211,13 @@ wide enough for the worst case, `M` terms each maxed out at `2^N`, since
 (depends only on `M`, not on computing `2^N` directly, so it stays correct
 even for large `N`).
 
-Also tested via `emp::ClearSession` in `src/tests/dnf_weight_test.cpp`,
+Also tested via `emp::ClearSession` in `src/tests/dnf/dnf_weight_test.cpp`,
 including summing the exact four cubes from `cube_weight_test.cpp`
 (`16 + 1 + 8 + 0 = 25`).
 
 ### Cube intervals
 
-`src/gadgets/cube_intervals.h` takes the same `std::array<CubeWeight<Ctx,N>,
+`src/gadgets/dnf/cube_intervals.h` takes the same `std::array<CubeWeight<Ctx,N>,
 M>` and computes the `M+1` interval boundaries `T_0..T_M`: `T_0 = 0`,
 `T_{i+1} = T_i + weights[i]`. `T_i` is the total weight of every cube
 before `i` -- the starting offset of cube `i`'s own block in a running
@@ -220,7 +228,7 @@ weight of all `M` cubes -- exactly `dnf_weight`'s result. Reuses
 `dnf_weight`'s own return type), since this is a superset of the same
 summation.
 
-Also tested via `emp::ClearSession` in `src/tests/cube_intervals_test.cpp`,
+Also tested via `emp::ClearSession` in `src/tests/dnf/cube_intervals_test.cpp`,
 including the exact cube_weight/dnf_weight test cases: weights `[16,1,8,0]`
 -> intervals `[0,16,17,25,25]`, and weights `[4,8,1,1]` -> intervals
 `[0,4,12,13,14]` (both `T_M` values matching the corresponding
@@ -228,7 +236,7 @@ including the exact cube_weight/dnf_weight test cases: weights `[16,1,8,0]`
 
 ### Select cube
 
-`src/gadgets/select_cube.h` samples a joint random integer in
+`src/gadgets/karp_luby/select_cube.h` samples a joint random integer in
 `[1, total_weight]`, finds which cube's block it falls in, and looks up
 that cube's bits/mask -- composed from three separately testable pieces
 (`select_cube(alice_r, bob_r, total, intervals, cubes)`, as `main.cpp`
@@ -236,7 +244,7 @@ calls it, just calls them in sequence and returns the final
 `CubeData<Ctx,N>{bits, mask}`; the intermediate sample/index aren't part
 of its return value -- a caller that wants those too, e.g. for testing,
 calls `sample_in_range`/`select_cube_index` directly instead, as
-`src/tests/select_cube_test.cpp` does):
+`src/tests/karp_luby/select_cube_test.cpp` does):
 
 1. **`sample_in_range(alice_r, bob_r, total)`** computes `(alice_r ^
    bob_r).as_uint() % total`, then `+1`. The `^` is a free-XOR coin flip --
@@ -272,7 +280,7 @@ calls `sample_in_range`/`select_cube_index` directly instead, as
    `0`, so it occupies a zero-width slice of the intervals that `z` can
    never land in).
 
-Also tested via `emp::ClearSession` in `src/tests/select_cube_test.cpp`:
+Also tested via `emp::ClearSession` in `src/tests/karp_luby/select_cube_test.cpp`:
 for `sample_in_range`, a basic case, wrapping above `total`, the
 minimum/maximum possible sample, and both contributions nonzero; for
 `select_cube_index`, every boundary (including exact hits, like `z=12`
@@ -284,7 +292,7 @@ pair resolves to the right `cube.bits`/`cube.mask`.
 
 ### Random assignment
 
-`src/gadgets/random_assignment.h` extends a `CubeData<Ctx,N>` (e.g. from
+`src/gadgets/karp_luby/random_assignment.h` extends a `CubeData<Ctx,N>` (e.g. from
 `select_cube`) into a full, uniformly random satisfying assignment over
 all `N` variables:
 
@@ -300,14 +308,14 @@ convention): `bits | (~0 & r) = r` -- filled in randomly. So if `r` is
 uniform, the result is a uniformly random assignment satisfying the cube.
 
 Also tested via `emp::ClearSession` in
-`src/tests/random_assignment_test.cpp`: a fully-constrained cube (the
+`src/tests/karp_luby/random_assignment_test.cpp`: a fully-constrained cube (the
 assignment is just the cube's bits, `r` irrelevant), an empty cube (the
 assignment is exactly `r`), and a partially-constrained cube with two
 different `r` values (the fixed bit stays put; the free bits track `r`).
 
 ### Count satisfied cubes
 
-`src/gadgets/count_satisfied_cubes.h` counts how many cubes in an array a
+`src/gadgets/karp_luby/count_satisfied_cubes.h` counts how many cubes in an array a
 given assignment satisfies: cube `c` is satisfied iff `(assignment &
 c.mask) == c.bits` -- assignment agrees with `c` on every variable `c`
 constrains (variables `c` leaves free never affect the check). A padding
@@ -319,7 +327,7 @@ built the same way as `select_cube_index`'s count: each `Bit_T` comparison
 turned into 0/1 via `.select()` before accumulating.
 
 Also tested via `emp::ClearSession` in
-`src/tests/count_satisfied_cubes_test.cpp`, against 3 ordinary cubes plus
+`src/tests/karp_luby/count_satisfied_cubes_test.cpp`, against 3 ordinary cubes plus
 a padding cube: assignments satisfying `0`, `1`, `2`, and `3` of the
 ordinary cubes, checking in each case that the padding cube is never
 counted -- including when every bit of the assignment happens to match
@@ -327,7 +335,7 @@ the padding cube's own `bits` pattern.
 
 ### Divide lookup
 
-`src/gadgets/divide_lookup.h` computes `1/count` for a `count` in
+`src/gadgets/karp_luby/divide_lookup.h` computes `1/count` for a `count` in
 `1..M`, via an oblivious lookup table instead of a division circuit:
 `count` is bounded by the small compile-time constant `M` (the number of
 conjunction cubes), so a linear-scan mux over `M` precomputed constants
@@ -348,13 +356,13 @@ compile-time constant, so that division is free (no circuit gates spent
 on it). `DivideLookupResult<Ctx,M>` (`= UInt_T<Ctx, bits_for(scale)>`) is
 wide enough to hold the largest table entry, `scale` itself (`count=1`).
 
-Also tested via `emp::ClearSession` in `src/tests/divide_lookup_test.cpp`:
+Also tested via `emp::ClearSession` in `src/tests/karp_luby/divide_lookup_test.cpp`:
 `M=4` gives `scale=12` (`lcm(1,2,3,4)`), and checks `divide_lookup(1..4)
 == 12, 6, 4, 3`.
 
 ### Karp-Luby estimate
 
-`src/gadgets/karp_luby_estimate.h` computes `dnf_weight * sum_t
+`src/gadgets/karp_luby/karp_luby_estimate.h` computes `dnf_weight * sum_t
 reciprocals[t]` over `K` independent trials -- the raw (unnormalized)
 numerator of the [Karp-Luby estimator](https://en.wikipedia.org/wiki/Karp%E2%80%93Luby_algorithm)
 (a.k.a. the "coverage algorithm") for the *true* number of satisfying
@@ -381,7 +389,7 @@ constants, so a caller does that division for free in plaintext on the
 *revealed* result, same as `divide_lookup`'s own un-scaling.
 
 Also tested via `emp::ClearSession` in
-`src/tests/karp_luby_estimate_test.cpp`, `N=4,M=4,K=3`: e.g.
+`src/tests/karp_luby/karp_luby_estimate_test.cpp`, `N=4,M=4,K=3`: e.g.
 `weight=20, reciprocals=[12,6,3] -> 20*(12+6+3) = 420` (matching
 `main.cpp`'s real `dnf_weight=20`, and 3 trials with `count = 1, 2, 4`),
 and a degenerate `weight=0 -> estimate=0` regardless of the reciprocals.
@@ -508,27 +516,27 @@ a whole now needs emp-tool too.
   - `dimacs_dnf.h` -- the DIMACS-DNF cube parser (header-only: `parse<VARS,CUBES>` is a template).
 - `src/gadgets/` -- Ctx-generic circuit gadgets, reusable across sessions:
   - `circuit_cube.h` -- `CircuitCube`, `CubeData`, `CubeWeight`, `DnfWeight`: the shared wire-level types.
-  - `dnf_distribute.h` -- the DNF-cube conjunction gadget.
-  - `cube_weight.h` -- the per-cube satisfying-assignment-count gadget.
-  - `dnf_weight.h` -- sums cube weights into the whole DNF's satisfying-assignment count.
-  - `cube_intervals.h` -- the exclusive prefix sum of cube weights.
-  - `select_cube.h` -- samples a joint random value, then selects and looks up the cube it lands in.
-  - `random_assignment.h` -- extends a selected cube into a full random satisfying assignment.
-  - `count_satisfied_cubes.h` -- counts how many cubes in an array an assignment satisfies.
-  - `divide_lookup.h` -- oblivious fixed-point `1/count` lookup table.
-  - `karp_luby_estimate.h` -- combines `K` trials' reciprocals and the total weight into the raw Karp-Luby estimate.
+  - `common.h` -- the `using` declarations every gadget below needs, plus two shared helpers (`zext_to`, `indicator`) that replace boilerplate several gadgets used to each reimplement.
+  - `dnf/` -- the DNF-conjunction-and-weighting stage:
+    - `dnf_distribute.h` -- the DNF-cube conjunction gadget.
+    - `cube_weight.h` -- the per-cube satisfying-assignment-count gadget.
+    - `dnf_weight.h` -- sums cube weights into the whole DNF's satisfying-assignment count.
+    - `cube_intervals.h` -- the exclusive prefix sum of cube weights.
+  - `karp_luby/` -- the Karp-Luby estimation stage:
+    - `select_cube.h` -- samples a joint random value, then selects and looks up the cube it lands in.
+    - `random_assignment.h` -- extends a selected cube into a full random satisfying assignment.
+    - `count_satisfied_cubes.h` -- counts how many cubes in an array an assignment satisfies.
+    - `divide_lookup.h` -- oblivious fixed-point `1/count` lookup table.
+    - `karp_luby_estimate.h` -- combines `K` trials' reciprocals and the total weight into the raw Karp-Luby estimate.
 - `src/tests/` -- unit tests, all built into the single `run_tests` binary:
   - `run_tests.cpp` -- the shared `main()`; calls each suite below.
+  - `bits_of.h` -- pure-stdlib `bits_of<N>(s)` helper (a `'0'`/`'1'` string -> `std::array<bool,N>`), shared by every test file including `dimacs_dnf_test.cpp`.
+  - `test_helpers.h` -- emp-tool dependent helpers built on `bits_of.h`: `bits_of_uint<WIDTH>` and `make_cube<Session,Ctx,N>`, shared by every gadget test file.
   - `dimacs_dnf_test.cpp` -- tests for `utils/dimacs_dnf.h`.
-  - `dnf_distribute_test.cpp` -- tests for `gadgets/dnf_distribute.h` (`emp::ClearSession`-based, no network).
-  - `cube_weight_test.cpp` -- tests for `gadgets/cube_weight.h` (`emp::ClearSession`-based, no network).
-  - `dnf_weight_test.cpp` -- tests for `gadgets/dnf_weight.h` (`emp::ClearSession`-based, no network).
-  - `cube_intervals_test.cpp` -- tests for `gadgets/cube_intervals.h` (`emp::ClearSession`-based, no network).
-  - `select_cube_test.cpp` -- tests for `gadgets/select_cube.h` (`emp::ClearSession`-based, no network).
-  - `random_assignment_test.cpp` -- tests for `gadgets/random_assignment.h` (`emp::ClearSession`-based, no network).
-  - `count_satisfied_cubes_test.cpp` -- tests for `gadgets/count_satisfied_cubes.h` (`emp::ClearSession`-based, no network).
-  - `divide_lookup_test.cpp` -- tests for `gadgets/divide_lookup.h` (`emp::ClearSession`-based, no network).
-  - `karp_luby_estimate_test.cpp` -- tests for `gadgets/karp_luby_estimate.h` (`emp::ClearSession`-based, no network).
+  - `dnf/` -- tests for `gadgets/dnf/`:
+    - `dnf_distribute_test.cpp`, `cube_weight_test.cpp`, `dnf_weight_test.cpp`, `cube_intervals_test.cpp` (all `emp::ClearSession`-based, no network).
+  - `karp_luby/` -- tests for `gadgets/karp_luby/`:
+    - `select_cube_test.cpp`, `random_assignment_test.cpp`, `count_satisfied_cubes_test.cpp`, `divide_lookup_test.cpp`, `karp_luby_estimate_test.cpp` (all `emp::ClearSession`-based, no network).
 - `sample.dnf` -- a standalone example DIMACS-DNF file (used by `dimacs_dnf_test.cpp`'s docs, not read by any binary).
 - `alice.dnf` / `bob.dnf` -- the two parties' example private inputs to `main.cpp`.
 - `run.sh` -- launches both parties of `sh2pc_demo` locally for a quick check.

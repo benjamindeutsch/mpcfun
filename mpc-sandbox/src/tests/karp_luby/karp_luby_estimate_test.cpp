@@ -1,12 +1,12 @@
-// Unit tests for gadgets/karp_luby_estimate.h, run entirely in the clear
-// via emp::ClearSession: no OT, no network, no garbling, single process --
-// same approach as select_cube_test.cpp.
+// Unit tests for gadgets/karp_luby/karp_luby_estimate.h, run entirely in
+// the clear via emp::ClearSession: no OT, no network, no garbling, single
+// process -- same approach as select_cube_test.cpp.
 //
 // run_karp_luby_estimate_tests() is called from tests/run_tests.cpp's
 // main(), the single entry point for every *_test.cpp under tests/ -- see
 // that file.
 
-#include "gadgets/karp_luby_estimate.h"
+#include "gadgets/karp_luby/karp_luby_estimate.h"
 #include "emp-tool/ir/session/clear_session.h"
 
 #include <array>

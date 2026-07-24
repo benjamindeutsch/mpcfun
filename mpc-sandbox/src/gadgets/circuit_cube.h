@@ -2,7 +2,7 @@
 // have the same meaning, just as emp::BitVec_T<Ctx,N>/emp::Bit_T<Ctx> wires
 // instead of vector<bool>/bool). A shared foundational type -- not specific
 // to any one gadget -- that any circuit working with DNF cubes builds on
-// (see gadgets/dnf_distribute.h, gadgets/cube_weight.h).
+// (see gadgets/dnf/dnf_distribute.h, gadgets/dnf/cube_weight.h).
 //
 // Ctx-generic (any emp::BooleanContext), not tied to a specific session:
 // the same type works under emp::ClearSession (plaintext, for fast gadget
@@ -10,14 +10,7 @@
 
 #pragma once
 
-#include "emp-tool/circuits/typed.h"
-#include "emp-tool/circuits/numeric_kernels.h"
-
-using emp::BitVec_T;
-using emp::Bit_T;
-using emp::UInt_T;
-using emp::BooleanContext;
-using emp::kernel::bits_for;
+#include "gadgets/common.h"
 
 namespace gadgets {
 
@@ -28,9 +21,9 @@ struct CircuitCube {
     Bit_T<Ctx> pad;
 };
 
-// Just bits/mask, no pad: the payload gadgets/select_cube.h's select_cube
-// hands back (a validly-selected cube is never padding) and
-// gadgets/random_assignment.h consumes.
+// Just bits/mask, no pad: the payload gadgets/karp_luby/select_cube.h's
+// select_cube hands back (a validly-selected cube is never padding) and
+// gadgets/karp_luby/random_assignment.h consumes.
 template <BooleanContext Ctx, int N>
 struct CubeData {
     BitVec_T<Ctx, N> bits;

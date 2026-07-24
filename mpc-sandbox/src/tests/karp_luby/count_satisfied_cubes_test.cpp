@@ -1,12 +1,13 @@
-// Unit tests for gadgets/count_satisfied_cubes.h, run entirely in the
-// clear via emp::ClearSession: no OT, no network, no garbling, single
+// Unit tests for gadgets/karp_luby/count_satisfied_cubes.h, run entirely in
+// the clear via emp::ClearSession: no OT, no network, no garbling, single
 // process -- same approach as select_cube_test.cpp.
 //
 // run_count_satisfied_cubes_tests() is called from tests/run_tests.cpp's
 // main(), the single entry point for every *_test.cpp under tests/ -- see
 // that file.
 
-#include "gadgets/count_satisfied_cubes.h"
+#include "gadgets/karp_luby/count_satisfied_cubes.h"
+#include "tests/test_helpers.h"
 #include "emp-tool/ir/session/clear_session.h"
 
 #include <array>
@@ -23,20 +24,6 @@ constexpr int M = 4;
 using Ctx = ClearSession::ctx_t;
 using BV  = BitVec_T<Ctx, N>;
 
-std::array<bool, N> bits_of(const char* s) {
-    std::array<bool, N> b{};
-    for (int i = 0; i < N; ++i) b[(std::size_t)i] = (s[i] == '1');
-    return b;
-}
-
-CircuitCube<Ctx, N> make_cube(ClearSession& sess, const char* bits, const char* mask, bool pad = false) {
-    return CircuitCube<Ctx, N>{
-        sess.input<BV>(PUBLIC, bits_of(bits)),
-        sess.input<BV>(PUBLIC, bits_of(mask)),
-        sess.input<Bit_T<Ctx>>(PUBLIC, pad),
-    };
-}
-
 }  // namespace
 
 int run_count_satisfied_cubes_tests() {
@@ -45,14 +32,14 @@ int run_count_satisfied_cubes_tests() {
     // cube1: x1. cube2: x2. cube3: x3. cube4: a padding cube
     // (bits=1111, mask=0000), which must never count as satisfied.
     std::array<CircuitCube<Ctx, N>, M> cubes = {
-        make_cube(sess, "1000", "1000"),
-        make_cube(sess, "0100", "0100"),
-        make_cube(sess, "0010", "0010"),
-        make_cube(sess, "1111", "0000", /*pad=*/true),
+        make_cube<ClearSession, Ctx, N>(sess, "1000", "1000"),
+        make_cube<ClearSession, Ctx, N>(sess, "0100", "0100"),
+        make_cube<ClearSession, Ctx, N>(sess, "0010", "0010"),
+        make_cube<ClearSession, Ctx, N>(sess, "1111", "0000", /*pad=*/true),
     };
 
     auto check = [&](const char* name, const char* assignment_str, uint64_t expect) {
-        BV assignment = sess.input<BV>(PUBLIC, bits_of(assignment_str));
+        BV assignment = sess.input<BV>(PUBLIC, bits_of<N>(assignment_str));
         uint64_t got = sess.reveal(count_satisfied_cubes<Ctx, N, M>(assignment, cubes), PUBLIC).value();
         if (got != expect) {
             std::fprintf(stderr, "FAIL %s (got %llu, expected %llu)\n", name,

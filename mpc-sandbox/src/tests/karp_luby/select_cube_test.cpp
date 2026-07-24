@@ -1,5 +1,5 @@
-// Unit tests for gadgets/select_cube.h, run entirely in the clear via
-// emp::ClearSession: no OT, no network, no garbling, single process --
+// Unit tests for gadgets/karp_luby/select_cube.h, run entirely in the clear
+// via emp::ClearSession: no OT, no network, no garbling, single process --
 // same approach as dnf_weight_test.cpp.
 //
 // ClearSession can't demonstrate the randomness/security property of the
@@ -10,7 +10,8 @@
 // run_select_cube_tests() is called from tests/run_tests.cpp's main(), the
 // single entry point for every *_test.cpp under tests/ -- see that file.
 
-#include "gadgets/select_cube.h"
+#include "gadgets/karp_luby/select_cube.h"
+#include "tests/test_helpers.h"
 #include "emp-tool/ir/session/clear_session.h"
 
 #include <array>
@@ -30,26 +31,6 @@ using RB  = SampleBits<Ctx, N, M>;
 using Idx = CubeIndex<Ctx, M>;
 constexpr int WIDTH = N + bits_for(M);  // = 7
 
-std::array<bool, WIDTH> bits_of_uint(uint64_t v) {
-    std::array<bool, WIDTH> b{};
-    for (int i = 0; i < WIDTH; ++i) b[(std::size_t)i] = ((v >> i) & 1) != 0;
-    return b;
-}
-
-std::array<bool, N> bits_of(const char* s) {
-    std::array<bool, N> b{};
-    for (int i = 0; i < N; ++i) b[(std::size_t)i] = (s[i] == '1');
-    return b;
-}
-
-CircuitCube<Ctx, N> make_cube(ClearSession& sess, const char* bits, const char* mask) {
-    return CircuitCube<Ctx, N>{
-        sess.input<BitVec_T<Ctx, N>>(PUBLIC, bits_of(bits)),
-        sess.input<BitVec_T<Ctx, N>>(PUBLIC, bits_of(mask)),
-        sess.input<Bit_T<Ctx>>(PUBLIC, false),
-    };
-}
-
 void fail(const char* name) {
     std::fprintf(stderr, "FAIL %s\n", name);
     std::exit(1);
@@ -57,8 +38,8 @@ void fail(const char* name) {
 
 void check_sample(ClearSession& sess, const char* name, uint64_t alice_r, uint64_t bob_r, uint64_t total,
                    uint64_t expect) {
-    RB a = sess.input<RB>(PUBLIC, bits_of_uint(alice_r));
-    RB b = sess.input<RB>(PUBLIC, bits_of_uint(bob_r));
+    RB a = sess.input<RB>(PUBLIC, bits_of_uint<WIDTH>(alice_r));
+    RB b = sess.input<RB>(PUBLIC, bits_of_uint<WIDTH>(bob_r));
     W  t = sess.input<W>(PUBLIC, total);
 
     uint64_t got = sess.reveal(sample_in_range<Ctx, N, M>(a, b, t), PUBLIC).value();
@@ -126,10 +107,10 @@ int run_select_cube_tests() {
     // cube_at_index -------------------------------------------------
 
     std::array<CircuitCube<Ctx, N>, M> cubes = {
-        make_cube(sess, "1000", "1000"),  // cube 1 (1-indexed)
-        make_cube(sess, "0100", "0100"),  // cube 2
-        make_cube(sess, "0010", "0010"),  // cube 3
-        make_cube(sess, "0001", "0001"),  // cube 4
+        make_cube<ClearSession, Ctx, N>(sess, "1000", "1000"),  // cube 1 (1-indexed)
+        make_cube<ClearSession, Ctx, N>(sess, "0100", "0100"),  // cube 2
+        make_cube<ClearSession, Ctx, N>(sess, "0010", "0010"),  // cube 3
+        make_cube<ClearSession, Ctx, N>(sess, "0001", "0001"),  // cube 4
     };
     for (uint64_t j = 1; j <= (uint64_t)M; ++j) {
         Idx idx = sess.input<Idx>(PUBLIC, j);
@@ -148,8 +129,8 @@ int run_select_cube_tests() {
     // (sample=11), over the same intervals=[0,8,12,16,20] (j=2, since
     // 8<11<=12) and cubes as above (cube 2 = "0100"/"0100").
     {
-        RB a = sess.input<RB>(PUBLIC, bits_of_uint(13));
-        RB b = sess.input<RB>(PUBLIC, bits_of_uint(7));
+        RB a = sess.input<RB>(PUBLIC, bits_of_uint<WIDTH>(13));
+        RB b = sess.input<RB>(PUBLIC, bits_of_uint<WIDTH>(7));
         W  t = sess.input<W>(PUBLIC, 20);
         std::array<W, M + 1> iw{};
         for (int i = 0; i < M + 1; ++i) iw[(std::size_t)i] = sess.input<W>(PUBLIC, intervals[(std::size_t)i]);
@@ -158,7 +139,7 @@ int run_select_cube_tests() {
         std::array<bool, N> bits_got = sess.reveal(result.bits, PUBLIC).value();
         std::array<bool, N> mask_got = sess.reveal(result.mask, PUBLIC).value();
 
-        if (bits_got != bits_of("0100") || mask_got != bits_of("0100"))
+        if (bits_got != bits_of<N>("0100") || mask_got != bits_of<N>("0100"))
             fail("select_cube: composed pipeline gave the wrong result");
         std::printf("PASS select_cube: (sample=11, j=2) -> cube=\"0100\"/\"0100\"\n");
     }
