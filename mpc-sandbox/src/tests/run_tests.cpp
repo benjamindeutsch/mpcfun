@@ -16,6 +16,8 @@ int run_cube_intervals_tests();
 int run_select_cube_tests();
 int run_random_assignment_tests();
 int run_count_satisfied_cubes_tests();
+int run_divide_lookup_tests();
+int run_karp_luby_estimate_tests();
 
 int main() {
     std::printf("=== dimacs_dnf_test ===\n");
@@ -41,6 +43,12 @@ int main() {
 
     std::printf("=== count_satisfied_cubes_test ===\n");
     run_count_satisfied_cubes_tests();
+
+    std::printf("=== divide_lookup_test ===\n");
+    run_divide_lookup_tests();
+
+    std::printf("=== karp_luby_estimate_test ===\n");
+    run_karp_luby_estimate_tests();
 
     std::printf("=== all test suites passed ===\n");
     return 0;

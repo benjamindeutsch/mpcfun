@@ -10,29 +10,28 @@
 //      (gadgets/dnf_weight.h), and
 //   4. computes the CUBES*CUBES+1 interval boundaries T_0..T_M over those
 //      weights (gadgets/cube_intervals.h), with T_M equal to the total
-//      from step 3, and
-//   5. samples a joint uniform random integer z in [1, total_weight]
-//      (gadgets/select_cube.h's sample_in_range), picks the (1-indexed)
-//      cube whose block z falls in via the T_0..T_M boundaries
-//      (select_cube_index), and looks up that cube's bits/mask
-//      (cube_at_index) -- see main() for why these are called directly
-//      rather than through select_cube(), which only returns the cube --
-//      and
-//   6. extends that cube into a full, uniformly random satisfying
-//      assignment over all VARS variables (gadgets/random_assignment.h),
-//      using a second joint random bitstring to fill in whatever the
-//      cube leaves unconstrained, and
-//   7. counts how many of the CUBES*CUBES conjunction cubes that
-//      assignment satisfies (gadgets/count_satisfied_cubes.h) -- a sanity
-//      check that it's at least 1 (the cube it was built from); it can be
-//      more than 1, since these particular conjunction cubes aren't
-//      guaranteed pairwise disjoint (unlike what gadgets/dnf_weight.h's
-//      sum assumes).
+//      from step 3, then
+//   5. runs K independent trials of: sample a joint uniform random
+//      integer z in [1, total_weight], pick the cube whose block z falls
+//      in, and look up its bits/mask (gadgets/select_cube.h), extend it
+//      into a full random satisfying assignment (gadgets/
+//      random_assignment.h), count how many of the CUBES*CUBES conjunction
+//      cubes that assignment satisfies (gadgets/count_satisfied_cubes.h),
+//      and look up a fixed-point 1/count via an oblivious table instead of
+//      a division circuit (gadgets/divide_lookup.h), and finally
+//   6. sums the K reciprocals and multiplies by the total from step 3
+//      (gadgets/karp_luby_estimate.h) -- the raw numerator of the
+//      Karp-Luby estimator for the DNF's *true* satisfying-assignment
+//      count (which can be less than step 3's total, since these
+//      particular conjunction cubes aren't guaranteed pairwise disjoint).
 //
-// All of the above is revealed to both parties at the end. That's NOT the
-// final protocol -- it's a placeholder so the whole pipeline can be
-// smoke-tested end to end; a real circuit would consume all of it
-// privately instead of leaking it. Expand this once that's built.
+// Only that final raw numerator is revealed -- everything else (the total
+// weight, the interval boundaries, every trial's sample/selected
+// cube/assignment/satisfied count) stays private, known to neither party.
+// The Karp-Luby estimate itself is (the revealed value) / (K *
+// gadgets::lookup_scale<PRODUCT>()): both K and the lookup scale are
+// public compile-time constants, so that division happens for free in
+// plaintext after reveal, rather than spending circuit gates on it.
 //
 // VARS/CUBES are the fixed capacity every DNF gets padded/validated against
 // (see dimacs_dnf::parse) -- they're compile-time constants shared by both
@@ -58,6 +57,8 @@
 #include "gadgets/select_cube.h"
 #include "gadgets/random_assignment.h"
 #include "gadgets/count_satisfied_cubes.h"
+#include "gadgets/divide_lookup.h"
+#include "gadgets/karp_luby_estimate.h"
 
 #include <array>
 #include <cstddef>
@@ -74,6 +75,7 @@ using namespace gadgets;
 constexpr int VARS = 4;
 constexpr int CUBES = 2;
 constexpr int PRODUCT = CUBES * CUBES;
+constexpr int K = 3;  // number of independent Karp-Luby trials
 
 using Ctx = SH2PCSession::ctx_t;
 using BV  = BitVec_T<Ctx, VARS>;
@@ -138,74 +140,57 @@ int main(int argc, char** argv) {
     array<TotalWeight, PRODUCT + 1> intervals =
         cube_intervals<Ctx, VARS, PRODUCT>(weights);
 
-    // Sample a joint random integer in [1, total_weight], find which cube
-    // it lands in (1-indexed), and look up that cube's bits/mask -- see
-    // gadgets/select_cube.h for the wire-level math. Each party draws its
-    // own real-entropy random bits locally (PRG() defaults to system
-    // randomness, not a fixed seed) and feeds them in as private input --
-    // that part is this session's job, not the gadget's, same as any
-    // other private input.
+    // K independent Karp-Luby trials. Each trial draws its own fresh joint
+    // randomness (both for select_cube's sampling step and for
+    // random_assignment's free-variable fill), so the K samples are
+    // independent -- required for the estimator's variance to actually
+    // shrink with K. Nothing about any trial is revealed -- only the final
+    // combined estimate is, below.
     using RandBits = SampleBits<Ctx, VARS, PRODUCT>;
-    array<bool, (size_t)TotalWidth> my_random_bits{};
-    PRG().random_bool(my_random_bits.data(), TotalWidth);
 
-    // select_cube() itself only returns the selected cube's bits/mask --
-    // since this demo also wants to show the intermediate sample/index for
-    // testing, it calls the granular sample_in_range/select_cube_index/
-    // cube_at_index pieces directly instead (equivalent to what select_cube
-    // does internally, just without discarding the intermediates).
-    RandBits alice_r = sess.input<RandBits>(ALICE, my_random_bits);
-    RandBits bob_r   = sess.input<RandBits>(BOB,   my_random_bits);
-    TotalWeight sample = sample_in_range<Ctx, VARS, PRODUCT>(alice_r, bob_r, total);
-    CubeIndex<Ctx, PRODUCT> cube_index = select_cube_index<Ctx, VARS, PRODUCT>(sample, intervals);
-    CubeData<Ctx, VARS> selected = cube_at_index<Ctx, VARS, PRODUCT>(cube_index, conjunction);
+    array<DivideLookupResult<Ctx, PRODUCT>, K> reciprocals{};
 
-    // Extend the selected cube into a full random satisfying assignment
-    // (gadgets/random_assignment.h): a second, independent joint random
-    // bitstring (same free-XOR construction, drawn/fed in the same way)
-    // fills in whatever the cube leaves unconstrained.
-    array<bool, VARS> my_assignment_bits{};
-    PRG().random_bool(my_assignment_bits.data(), VARS);
-    BV assignment_alice_r = sess.input<BV>(ALICE, my_assignment_bits);
-    BV assignment_bob_r   = sess.input<BV>(BOB,   my_assignment_bits);
-    BV assignment = random_assignment<Ctx, VARS>(selected, assignment_alice_r, assignment_bob_r);
+    for (int t = 0; t < K; ++t) {
+        array<bool, (size_t)TotalWidth> my_random_bits{};
+        PRG().random_bool(my_random_bits.data(), TotalWidth);
+        RandBits alice_r = sess.input<RandBits>(ALICE, my_random_bits);
+        RandBits bob_r   = sess.input<RandBits>(BOB,   my_random_bits);
+        CubeData<Ctx, VARS> selected =
+            select_cube<Ctx, VARS, PRODUCT>(alice_r, bob_r, total, intervals, conjunction);
 
-    // Sanity check: how many of the conjunction's cubes does assignment
-    // actually satisfy (gadgets/count_satisfied_cubes.h)? Always >= 1.
-    SatisfiedCount<Ctx, PRODUCT> satisfied_count =
-        count_satisfied_cubes<Ctx, VARS, PRODUCT>(assignment, conjunction);
+        // Extend the selected cube into a full random satisfying
+        // assignment (gadgets/random_assignment.h): a second, independent
+        // joint random bitstring (same free-XOR construction, drawn/fed
+        // the same way) fills in whatever the cube leaves unconstrained.
+        array<bool, VARS> my_assignment_bits{};
+        PRG().random_bool(my_assignment_bits.data(), VARS);
+        BV assignment_alice_r = sess.input<BV>(ALICE, my_assignment_bits);
+        BV assignment_bob_r   = sess.input<BV>(BOB,   my_assignment_bits);
+        BV assignment = random_assignment<Ctx, VARS>(selected, assignment_alice_r, assignment_bob_r);
 
-    uint64_t total_out = sess.reveal(total, PUBLIC).value();
-    uint64_t sample_out = sess.reveal(sample, PUBLIC).value();
-    uint64_t cube_index_out = sess.reveal(cube_index, PUBLIC).value();
-    array<bool, VARS> cube_bits_out = sess.reveal(selected.bits, PUBLIC).value();
-    array<bool, VARS> cube_mask_out = sess.reveal(selected.mask, PUBLIC).value();
-    array<bool, VARS> assignment_out = sess.reveal(assignment, PUBLIC).value();
-    uint64_t satisfied_count_out = sess.reveal(satisfied_count, PUBLIC).value();
-    array<uint64_t, PRODUCT + 1> intervals_out{};
-    for (int i = 0; i < PRODUCT + 1; ++i)
-        intervals_out[(size_t)i] = sess.reveal(intervals[(size_t)i], PUBLIC).value();
+        SatisfiedCount<Ctx, PRODUCT> satisfied_count =
+            count_satisfied_cubes<Ctx, VARS, PRODUCT>(assignment, conjunction);
+        reciprocals[(size_t)t] = divide_lookup<Ctx, PRODUCT>(satisfied_count);
+    }
+
+    KarpLubyEstimate<Ctx, VARS, PRODUCT, K> estimate =
+        karp_luby_estimate<Ctx, VARS, PRODUCT, K>(total, reciprocals);
+
+    uint64_t estimate_raw_out = sess.reveal(estimate, PUBLIC).value();
 
     sess.finalize();
 
-    std::cout << (party == ALICE ? "[alice]" : "[bob]  ")
-              << " file=" << path
-              << "  total_weight=" << total_out
-              << "  sample=" << sample_out
-              << "  cube_index(1-indexed)=" << cube_index_out
-              << "  cube_bits=";
-    for (int i = 0; i < VARS; ++i) std::cout << (cube_bits_out[(size_t)i] ? '1' : '0');
-    std::cout << "  cube_mask=";
-    for (int i = 0; i < VARS; ++i) std::cout << (cube_mask_out[(size_t)i] ? '1' : '0');
-    std::cout << "  assignment=";
-    for (int i = 0; i < VARS; ++i) std::cout << (assignment_out[(size_t)i] ? '1' : '0');
-    std::cout << "  satisfied_count=" << satisfied_count_out
-              << "  intervals=[";
-    for (int i = 0; i < PRODUCT + 1; ++i) {
-        if (i) std::cout << ",";
-        std::cout << intervals_out[(size_t)i];
-    }
-    std::cout << "]" << std::endl;
+    // Un-scale the raw estimate: divide by K * lookup_scale<PRODUCT>(),
+    // both public compile-time constants, so this costs nothing in the
+    // circuit -- see gadgets/karp_luby_estimate.h.
+    uint64_t scale = lookup_scale<PRODUCT>();
+    double karp_luby_estimate_value = (double)estimate_raw_out / (double)((uint64_t)K * scale);
+
+    std::string who = (party == ALICE) ? "[alice]" : "[bob]  ";
+    std::cout << who << " file=" << path
+              << "  karp_luby_estimate_raw=" << estimate_raw_out
+              << "  (K=" << K << ", scale=" << scale << ")"
+              << "  karp_luby_estimate=" << karp_luby_estimate_value << std::endl;
 
     return 0;
 }

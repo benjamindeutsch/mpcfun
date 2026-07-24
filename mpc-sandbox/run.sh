@@ -3,7 +3,7 @@
 #
 # Usage: ./run.sh <alice-dnf-file> <bob-dnf-file>
 # Example: ./run.sh   -> uses the bundled alice.dnf / bob.dnf,
-#                        giving total_weight=20, intervals=[0,8,12,16]
+#                        giving total_weight=20, intervals=[0,8,12,16,20]
 
 set -euo pipefail
 

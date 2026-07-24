@@ -5,11 +5,17 @@ A two-party garbled-circuit pipeline for DNF intersection counting, built on
 `emp-sh2pc`, semi-honest 2PC). Alice and Bob each hold a private DNF formula
 (as a DIMACS-style file); the circuit computes the cubes of the two DNFs'
 conjunction, each cube's satisfying-assignment count, both the total count
-and the per-cube exclusive prefix sum over those counts, and a joint
-uniform random sample in `[1, total_weight]` -- currently revealing all of
-that to both parties, purely so the pipeline can be smoke-tested end to end
-(see "Putting it together" below for what that means and what's still a
-placeholder).
+and the per-cube exclusive prefix sum over those counts, and then runs `K`
+independent trials of a **Karp-Luby estimator** (joint-random cube
+selection, a random satisfying assignment of it, a count of how many
+conjunction cubes that assignment satisfies, and an oblivious 1/count
+lookup) to approximate the *true* satisfying-assignment count of the
+conjunction -- which can be less than the total from the disjoint-cube sum,
+since the conjunction's cubes aren't guaranteed pairwise disjoint. Only
+that final estimate is revealed to both parties; everything else (the
+total weight, the interval boundaries, every trial's sample/selected
+cube/assignment/satisfied count) stays private (see "Putting it together"
+below for what's still a placeholder beyond that).
 
 ## Prerequisites
 
@@ -60,21 +66,20 @@ both args optional -- default to the bundled `alice.dnf`/`bob.dnf`):
 
 ```sh
 ./run.sh
-# [alice] file=alice.dnf  total_weight=20  sample=15  cube_index(1-indexed)=3  cube_bits=1000  cube_mask=1100  assignment=1010  satisfied_count=4  intervals=[0,8,12,16,20]
-# [bob]   file=bob.dnf  total_weight=20  sample=15  cube_index(1-indexed)=3  cube_bits=1000  cube_mask=1100  assignment=1010  satisfied_count=4  intervals=[0,8,12,16,20]
+# [bob]   file=./bob.dnf  karp_luby_estimate_raw=180  (K=3, scale=12)  karp_luby_estimate=5
+# [alice] file=./alice.dnf  karp_luby_estimate_raw=180  (K=3, scale=12)  karp_luby_estimate=5
 ```
 
-(`sample` is a fresh joint-random draw in `[1, total_weight]` each run;
-`cube_index` is the (1-indexed) cube whose block it falls in;
-`cube_bits`/`cube_mask` are that cube's data; `assignment` is a
-uniformly random full assignment satisfying it (matching `cube_bits` on
-every variable `cube_mask` constrains, random elsewhere); and
-`satisfied_count` is how many of the 4 conjunction cubes `assignment`
-satisfies -- always `>= 1`, and here it's `4`, since `x1=1,x3=1`
-(`assignment`'s bits `1_1_`) happens to satisfy every one of Alice's and
-Bob's original cubes at once -- both parties
-always agree
-on all of it, but it varies run to run.)
+(`karp_luby_estimate_raw` is the only revealed value -- `total_weight * sum`
+of the `K` trials' `divide_lookup` reciprocals (see "Divide lookup" and
+"Karp-Luby estimate" below), all `K` trials' sampling, selection, and
+counting having stayed entirely private. Dividing that raw value by `K *
+scale` in plaintext (free, since both are public compile-time constants)
+gives the actual Karp-Luby estimate of the conjunction's true
+satisfying-assignment count -- `5` here, below `total_weight=20`, since
+these particular conjunction cubes overlap. Both parties always agree on
+it, but it varies run to run, since it depends on `K` fresh joint-random
+samples each time.)
 
 Alice listens on a fixed localhost port (default `12345`); Bob connects to
 it. Override with the `EMP_PORT` (port) and `EMP_PEER_IP` (Bob's target
@@ -125,9 +130,9 @@ the same fields as `dimacs_dnf::Cube` but as wires
 `CubeData<Ctx,N>{bits, mask}` (no `pad`); and the `CubeWeight<Ctx,N>` and
 `DnfWeight<Ctx,N,M>` aliases. All four are shared foundational types, used
 by more than one gadget (`cube_weight.h`/`dnf_weight.h`/
-`cube_intervals.h`/`select_cube.h`/`random_assignment.h`) -- they live in
-their own file (rather than inside whichever gadget happened to need them
-first) for exactly that reason.
+`cube_intervals.h`/`select_cube.h`/`random_assignment.h`/
+`karp_luby_estimate.h`) -- they live in their own file (rather than inside
+whichever gadget happened to need them first) for exactly that reason.
 
 `src/gadgets/dnf_distribute.h`'s `conjoin`/`conjoin_dnf` use `CircuitCube`
 for both inputs and outputs -- there's no separate "result" type, since a
@@ -226,11 +231,12 @@ including the exact cube_weight/dnf_weight test cases: weights `[16,1,8,0]`
 `src/gadgets/select_cube.h` samples a joint random integer in
 `[1, total_weight]`, finds which cube's block it falls in, and looks up
 that cube's bits/mask -- composed from three separately testable pieces
-(`select_cube(alice_r, bob_r, total, intervals, cubes)` just calls them in
-sequence and returns the final `CubeData<Ctx,N>{bits, mask}`; the
-intermediate sample/index aren't part of its return value -- a caller that
-wants those too, e.g. for testing, calls `sample_in_range`/
-`select_cube_index` directly instead, as `main.cpp` does):
+(`select_cube(alice_r, bob_r, total, intervals, cubes)`, as `main.cpp`
+calls it, just calls them in sequence and returns the final
+`CubeData<Ctx,N>{bits, mask}`; the intermediate sample/index aren't part
+of its return value -- a caller that wants those too, e.g. for testing,
+calls `sample_in_range`/`select_cube_index` directly instead, as
+`src/tests/select_cube_test.cpp` does):
 
 1. **`sample_in_range(alice_r, bob_r, total)`** computes `(alice_r ^
    bob_r).as_uint() % total`, then `+1`. The `^` is a free-XOR coin flip --
@@ -319,6 +325,67 @@ ordinary cubes, checking in each case that the padding cube is never
 counted -- including when every bit of the assignment happens to match
 the padding cube's own `bits` pattern.
 
+### Divide lookup
+
+`src/gadgets/divide_lookup.h` computes `1/count` for a `count` in
+`1..M`, via an oblivious lookup table instead of a division circuit:
+`count` is bounded by the small compile-time constant `M` (the number of
+conjunction cubes), so a linear-scan mux over `M` precomputed constants
+is cheaper than an actual divider circuit. emp-toolkit has no native
+lookup-table/lookup-argument primitive for garbled circuits (that term
+elsewhere refers to SNARK/polynomial-commitment techniques like Plookup,
+which don't apply here) -- so this is the same equality-compare +
+`.select()` mux chain as `select_cube_index`/`count_satisfied_cubes`,
+just keyed by `count` instead of accumulating a sum.
+
+Since division isn't generally exact, the table stores a *fixed-point*
+reciprocal: `lookup_scale<M>() = lcm(1..M)` (computed at compile time via
+`constexpr` `gcd`/`lcm`), and `divide_lookup(count)` returns `scale /
+count` -- exact, no rounding, since `scale` is a multiple of every `count`
+in range by construction. A caller divides the *revealed* result by
+`scale` in plaintext to recover the true `1/count`; `scale` is a public
+compile-time constant, so that division is free (no circuit gates spent
+on it). `DivideLookupResult<Ctx,M>` (`= UInt_T<Ctx, bits_for(scale)>`) is
+wide enough to hold the largest table entry, `scale` itself (`count=1`).
+
+Also tested via `emp::ClearSession` in `src/tests/divide_lookup_test.cpp`:
+`M=4` gives `scale=12` (`lcm(1,2,3,4)`), and checks `divide_lookup(1..4)
+== 12, 6, 4, 3`.
+
+### Karp-Luby estimate
+
+`src/gadgets/karp_luby_estimate.h` computes `dnf_weight * sum_t
+reciprocals[t]` over `K` independent trials -- the raw (unnormalized)
+numerator of the [Karp-Luby estimator](https://en.wikipedia.org/wiki/Karp%E2%80%93Luby_algorithm)
+(a.k.a. the "coverage algorithm") for the *true* number of satisfying
+assignments of a union of possibly-overlapping sets -- here, the
+conjunction's cubes, which (unlike a correctly-built disjoint cube cover)
+aren't guaranteed pairwise disjoint, so `dnf_weight`'s plain sum
+over-counts assignments satisfying more than one cube.
+
+Each trial is one independent run of `select_cube -> random_assignment ->
+count_satisfied_cubes -> divide_lookup` (see their sections above): sample
+a cube weighted by its size, sample a uniform satisfying assignment of it,
+count how many conjunction cubes that assignment satisfies (`count`), and
+look up `1/count`. This makes `E[1/count] = true_count / dnf_weight` (the
+standard Karp-Luby argument), so `E[dnf_weight * sum_t(1/count_t)] = K *
+true_count`. `karp_luby_estimate<Ctx,N,M,K>(weight, reciprocals)` takes
+the `DnfWeight<Ctx,N,M>` total and a `std::array<DivideLookupResult<Ctx,M>,
+K>` of the `K` trials' reciprocals, and returns the raw product as a
+`KarpLubyEstimate<Ctx,N,M,K>` -- wide enough for the worst case via the
+usual zext-to-common-width-then-multiply/sum pattern.
+
+The actual unbiased estimate is `(this result) / (K *
+lookup_scale<M>())`: both `K` and the lookup scale are public compile-time
+constants, so a caller does that division for free in plaintext on the
+*revealed* result, same as `divide_lookup`'s own un-scaling.
+
+Also tested via `emp::ClearSession` in
+`src/tests/karp_luby_estimate_test.cpp`, `N=4,M=4,K=3`: e.g.
+`weight=20, reciprocals=[12,6,3] -> 20*(12+6+3) = 420` (matching
+`main.cpp`'s real `dnf_weight=20`, and 3 trials with `count = 1, 2, 4`),
+and a degenerate `weight=0 -> estimate=0` regardless of the reciprocals.
+
 ## Putting it together
 
 `src/main.cpp` is the two-party pipeline: each party's private input is a
@@ -333,22 +400,28 @@ private input to the circuit, which:
 4. sums those into the conjunction's total satisfying-assignment count
    (`dnf_weight`),
 5. computes the `CUBES*CUBES+1` interval boundaries over the weights
-   (`cube_intervals`), and
-6. draws each party's local random contribution and, from it, samples a
-   joint uniform value in `[1, total_weight]`, finds which cube's block it
-   falls in, and looks up that cube's bits/mask (see the "Select cube"
-   section above). `main.cpp` calls the three underlying pieces
-   (`sample_in_range`/`select_cube_index`/`cube_at_index`) directly rather
-   than the composed `select_cube`, since it also wants to reveal the
-   intermediate sample/index, which `select_cube` doesn't return, and
-7. draws a second joint random contribution and extends the selected cube
-   into a full random satisfying assignment over all `VARS` variables
-   (`random_assignment` -- see its section above), and
-8. counts how many of the `CUBES*CUBES` conjunction cubes that assignment
-   actually satisfies (`count_satisfied_cubes` -- see its section above)
-   as a sanity check: always `>= 1` (the cube it was built from), possibly
-   more, since these particular conjunction cubes aren't guaranteed
-   pairwise disjoint.
+   (`cube_intervals`), then
+6. runs `K` independent trials (`K=3` currently) of the Karp-Luby
+   sub-pipeline, each with its own fresh joint-random draws, all of it
+   staying private (nothing about any individual trial is revealed):
+   1. draws each party's local random contribution and, from it, samples a
+      joint uniform value in `[1, total_weight]`, finds which cube's block
+      it falls in, and looks up that cube's bits/mask (`select_cube` --
+      see the "Select cube" section above),
+   2. draws a second joint random contribution and extends the selected
+      cube into a full random satisfying assignment over all `VARS`
+      variables (`random_assignment` -- see its section above),
+   3. counts how many of the `CUBES*CUBES` conjunction cubes that
+      assignment actually satisfies (`count_satisfied_cubes` -- see its
+      section above): always `>= 1` (the cube it was built from), possibly
+      more, since these particular conjunction cubes aren't guaranteed
+      pairwise disjoint, and
+   4. looks up that count's fixed-point reciprocal (`divide_lookup` -- see
+      its section above), and
+7. sums the `K` reciprocals and multiplies by the total from step 4
+   (`karp_luby_estimate` -- see its section above), the raw numerator of
+   the Karp-Luby estimate of the conjunction's *true* satisfying-assignment
+   count.
 
 `VARS`/`CUBES` (currently `4`/`2`, so `PRODUCT = CUBES*CUBES = 4`) are
 compile-time constants shared by both parties, not read from either file --
@@ -356,22 +429,23 @@ the circuit's size has to be public in MPC, which is the whole reason
 `dimacs_dnf::parse` pads to a fixed capacity instead of just sizing to
 whatever's in the file.
 
-Everything above is revealed to both parties at the end. **That's not the
-final protocol** -- it's a placeholder so the whole pipeline can be
-smoke-tested end to end. A real circuit would consume all of it
-*privately* (e.g. a threshold check on the total, or actually using the
-selected cube's bits/mask for something) instead of leaking it; expand
-`main.cpp` once that's built.
+Only step 7's final raw estimate is revealed to both parties -- the total
+weight, the interval boundaries, and every trial's sample/selected
+cube/assignment/satisfied count all stay private, known to neither party.
+That's not quite the final protocol either -- a real deployment would
+likely want to keep even the estimate private (e.g. only reveal a
+threshold check against it) -- but it's the actual Karp-Luby computation,
+not a placeholder.
 
 `alice.dnf` / `bob.dnf` at the project root are the bundled example
 inputs (`VARS=4, CUBES=2`, matching `main.cpp`): Alice's DNF is `x1 ∨ ¬x2`,
 Bob's is `x1 ∨ x3`. Their conjunction's 4 cubes all turn out non-contradictory
-here (weights `8, 4, 4, 4` in cross-product order), giving `total_weight=20`
-and `intervals=[0,8,12,16,20]` (5 boundaries for 4 cubes; the last one, `20`,
-is the total weight). `sample` is a fresh draw in `[1,20]` every run, and
-`cube_index` (1-indexed, in `[1,4]`) is whichever of the 4 cubes its block
-landed in -- e.g. `sample=15` lands in cube `3` (`x1 ∧ ¬x2`, from `A1 ∧
-B0`), reported as `cube_bits=1000, cube_mask=1100`.
+(weights `8, 4, 4, 4` in cross-product order), giving a (private)
+`total_weight=20` -- which exceeds `2^VARS=16`, the maximum possible number
+of distinct assignments, so these 4 conjunction cubes necessarily overlap.
+The revealed `karp_luby_estimate` (e.g. `5` in the "Run" example above,
+varying run to run since it depends on `K` fresh joint-random samples each
+time) comes out below `total_weight=20`, correctly reflecting that overlap.
 
 ## Tests
 
@@ -404,6 +478,16 @@ previous one passed in full.
 # PASS empty+full+single+padding: intervals = [0,16,17,25]
 # ...
 # cube_intervals_test: all checks passed
+# === select_cube_test ===
+# ...
+# === random_assignment_test ===
+# ...
+# === count_satisfied_cubes_test ===
+# ...
+# === divide_lookup_test ===
+# ...
+# === karp_luby_estimate_test ===
+# ...
 # === all test suites passed ===
 ```
 
@@ -431,6 +515,8 @@ a whole now needs emp-tool too.
   - `select_cube.h` -- samples a joint random value, then selects and looks up the cube it lands in.
   - `random_assignment.h` -- extends a selected cube into a full random satisfying assignment.
   - `count_satisfied_cubes.h` -- counts how many cubes in an array an assignment satisfies.
+  - `divide_lookup.h` -- oblivious fixed-point `1/count` lookup table.
+  - `karp_luby_estimate.h` -- combines `K` trials' reciprocals and the total weight into the raw Karp-Luby estimate.
 - `src/tests/` -- unit tests, all built into the single `run_tests` binary:
   - `run_tests.cpp` -- the shared `main()`; calls each suite below.
   - `dimacs_dnf_test.cpp` -- tests for `utils/dimacs_dnf.h`.
@@ -441,6 +527,8 @@ a whole now needs emp-tool too.
   - `select_cube_test.cpp` -- tests for `gadgets/select_cube.h` (`emp::ClearSession`-based, no network).
   - `random_assignment_test.cpp` -- tests for `gadgets/random_assignment.h` (`emp::ClearSession`-based, no network).
   - `count_satisfied_cubes_test.cpp` -- tests for `gadgets/count_satisfied_cubes.h` (`emp::ClearSession`-based, no network).
+  - `divide_lookup_test.cpp` -- tests for `gadgets/divide_lookup.h` (`emp::ClearSession`-based, no network).
+  - `karp_luby_estimate_test.cpp` -- tests for `gadgets/karp_luby_estimate.h` (`emp::ClearSession`-based, no network).
 - `sample.dnf` -- a standalone example DIMACS-DNF file (used by `dimacs_dnf_test.cpp`'s docs, not read by any binary).
 - `alice.dnf` / `bob.dnf` -- the two parties' example private inputs to `main.cpp`.
 - `run.sh` -- launches both parties of `sh2pc_demo` locally for a quick check.
