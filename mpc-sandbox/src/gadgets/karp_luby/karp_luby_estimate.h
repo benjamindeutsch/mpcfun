@@ -33,6 +33,25 @@
 
 namespace gadgets {
 
+// karp_luby_trials(vars, epsilon): the number of independent trials K a
+// caller needs (see gadgets/karp_luby/select_cube.h/random_assignment.h/
+// count_satisfied_cubes.h/divide_lookup.h and karp_luby_estimate() above)
+// for the resulting Karp-Luby estimate to be within relative error epsilon
+// of the true count with probability >= 3/4:
+//
+//   K = ceil(4 * (vars^2 - 1)^2 / epsilon^2)
+//
+// A plain host-side compile-time calculation (no Ctx/wires involved,
+// unlike everything else in this file) -- callers use it to pick K, e.g.
+// `constexpr int K = karp_luby_trials(VARS, 0.1);`, then pass that K on to
+// karp_luby_estimate<Ctx,N,M,K> and every other K-templated gadget above.
+constexpr int karp_luby_trials(int vars, double epsilon) {
+    double m = (double)vars * (double)vars - 1.0;
+    double k = 4.0 * m * m / (epsilon * epsilon);
+    int ik = (int)k;
+    return (k > (double)ik) ? ik + 1 : ik;  // ceiling
+}
+
 // Wide enough for the raw sum of K reciprocal-lookup terms, each at most
 // lookup_scale<M>().
 template <BooleanContext Ctx, int M, int K>

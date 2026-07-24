@@ -5,6 +5,12 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
+# ../.vscode/c_cpp_properties.json points IntelliSense at
+# build/compile_commands.json for this project's include paths (gadgets/,
+# utils/, pipeline/ under src/) -- generate it so that resolves instead of
+# leaving the editor to guess and flag every #include as unresolved.
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 # emp-sh2pc's public header requires C++20 (it is set as a transitive compile
 # feature on the emp-sh2pc target below), so this is mostly documentation.
 set(CMAKE_CXX_STANDARD 20)
@@ -47,6 +53,24 @@ target_link_libraries(sh2pc_demo PRIVATE
     ${GMPXX_LIBRARY}
 )
 target_include_directories(sh2pc_demo PRIVATE ${GMP_INCLUDE_DIR} ${MPC_SANDBOX_SRC_DIR})
+
+# Benchmark binary, following emp-toolkit's own bench_<component>.cpp
+# convention (see emp-tool/docs/benchmark_conventions.md) rather than a
+# bespoke harness: src/bench/bench_karp_luby.cpp times the real 2PC
+# pipeline via emp-tool's clock_start()/time_from(), at the K a target
+# epsilon actually requires (see gadgets/karp_luby/karp_luby_estimate.h's
+# karp_luby_trials()) -- unlike sh2pc_demo's small fixed K, which is only
+# for a fast interactive smoke test.
+add_executable(bench_karp_luby src/bench/bench_karp_luby.cpp)
+target_link_libraries(bench_karp_luby PRIVATE
+    emp-sh2pc::emp-sh2pc
+    emp-ot::emp-ot
+    emp-tool::emp-tool
+    OpenSSL::Crypto
+    ${GMP_LIBRARY}
+    ${GMPXX_LIBRARY}
+)
+target_include_directories(bench_karp_luby PRIVATE ${GMP_INCLUDE_DIR} ${MPC_SANDBOX_SRC_DIR})
 
 # One test binary for every tests/*_test.cpp (see run_tests.cpp): each
 # exposes a run_*_tests() called from run_tests.cpp's main(), so a new test

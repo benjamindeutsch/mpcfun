@@ -394,13 +394,37 @@ Also tested via `emp::ClearSession` in
 `main.cpp`'s real `dnf_weight=20`, and 3 trials with `count = 1, 2, 4`),
 and a degenerate `weight=0 -> estimate=0` regardless of the reciprocals.
 
+The same file also has `karp_luby_trials(vars, epsilon)` -- a plain
+host-side `constexpr` calculation (no `Ctx`/wires involved, unlike
+everything else in this file), *not* a circuit gadget: the number of
+trials `K` needed for the resulting estimate to be within relative error
+`epsilon` of the true count with probability `>= 3/4` (a Chebyshev/
+second-moment bound), `K = ceil(4 * (vars^2 - 1)^2 / epsilon^2)`. Callers
+pick `K` from this before touching any of the `K`-templated gadgets above
+-- `src/bench/bench_karp_luby.cpp` does exactly that (see "Benchmarks"
+below); `src/main.cpp` doesn't, since its `K=3` is deliberately just a fast
+interactive smoke test, not a real accuracy guarantee. Checked against two
+hand-computed cases in `karp_luby_estimate_test.cpp`:
+`karp_luby_trials(4, 0.5) == 3600` and `karp_luby_trials(2, 1.0) == 36`.
+
 ## Putting it together
 
-`src/main.cpp` is the two-party pipeline: each party's private input is a
-path to its own DIMACS-DNF file. Parsing (`dimacs_dnf::parse<VARS,CUBES>`)
-happens locally, in the clear, before either party touches the network --
-it's data prep, not a circuit. The parsed cubes then become each party's
-private input to the circuit, which:
+`src/pipeline/karp_luby_pipeline.h`'s `run_karp_luby_pipeline<VARS,CUBES,K>
+(sess, my_dnf)` is the two-party circuit itself -- each party's already
+locally-`dimacs_dnf::parse<VARS,CUBES>`d DNF in (parsing happens before
+either party touches the network -- it's data prep, not a circuit; see
+"DIMACS-DNF cube parser" above), a single revealed raw Karp-Luby numerator
+out. It's a function rather than living directly in `main()` because two
+different binaries need it with two different `K`s: `src/main.cpp` (the
+interactive demo, `K=3`, just a fast smoke test) and
+`src/bench/bench_karp_luby.cpp` (the benchmark, `K` from a real target
+epsilon -- see "Benchmarks" below) would otherwise each carry their own
+copy. Not `Ctx`-generic like the `gadgets/` headers it calls -- it's
+`SH2PCSession`-only, since it does real network I/O via `sess.input`/
+`sess.reveal`, unlike the pure wire-level gadgets underneath it, which stay
+testable under `ClearSession`.
+
+Given each party's already-parsed cubes as private input, the circuit:
 
 1. builds `CircuitCube<Ctx,VARS>` inputs for both parties' `CUBES` cubes,
 2. computes the `CUBES*CUBES` cubes of their conjunction (`conjoin_dnf`),
@@ -409,9 +433,10 @@ private input to the circuit, which:
    (`dnf_weight`),
 5. computes the `CUBES*CUBES+1` interval boundaries over the weights
    (`cube_intervals`), then
-6. runs `K` independent trials (`K=3` currently) of the Karp-Luby
-   sub-pipeline, each with its own fresh joint-random draws, all of it
-   staying private (nothing about any individual trial is revealed):
+6. runs `K` independent trials (a template parameter -- see above for how
+   the two callers each pick it) of the Karp-Luby sub-pipeline, each with
+   its own fresh joint-random draws, all of it staying private (nothing
+   about any individual trial is revealed):
    1. draws each party's local random contribution and, from it, samples a
       joint uniform value in `[1, total_weight]`, finds which cube's block
       it falls in, and looks up that cube's bits/mask (`select_cube` --
@@ -508,10 +533,63 @@ One trade-off worth knowing: `dimacs_dnf_test.cpp` itself stays pure stdlib
 the same `run_tests` binary as `dnf_distribute_test.cpp`, that one binary as
 a whole now needs emp-tool too.
 
+## Benchmarks
+
+`src/bench/bench_karp_luby.cpp` times the real two-party circuit
+(`pipeline/karp_luby_pipeline.h`, the same one `main.cpp` runs) at the `K`
+a target relative error `EPSILON` (currently `0.2`) actually requires with
+probability `>= 3/4` (`gadgets::karp_luby_trials(VARS, EPSILON)` -- see the
+"Karp-Luby estimate" section above), rather than `main.cpp`'s small fixed
+`K=3` smoke-test value.
+
+It follows emp-toolkit's own benchmark conventions
+(`emp-tool/docs/benchmark_conventions.md`) instead of a bespoke harness:
+named `bench_<component>.cpp`; the timed region is wrapped in
+`clock_start()`/`time_from()` (`emp-tool/runtime/core/utils.h`) around only
+the protocol call itself, excluding unrelated setup (the local DIMACS
+parse, the session/network handshake) so the reported time isn't billed
+for work the real protocol wouldn't count either. Network stats (bytes
+sent/received, communication rounds, buffer flushes) need no extra
+instrumentation -- they print automatically from `NetIO`'s own destructor
+whenever it isn't constructed `quiet` (the default both here and in
+`sh2pc_demo`).
+
+```sh
+./build/bench_karp_luby <party: 1=ALICE, 2=BOB> <path-to-dimacs-dnf-file>
+```
+
+Same two-party launch convention as `sh2pc_demo` -- two terminals, or
+`./run.sh` adapted to point at `build/bench_karp_luby` instead. Example,
+against the bundled `alice.dnf`/`bob.dnf` (`VARS=4, CUBES=2`, so
+`EPSILON=0.2` gives `K = ceil(4*(4^2-1)^2/0.2^2) = 22500`):
+
+```sh
+# [alice] file=alice.dnf  VARS=4 CUBES=2  epsilon=0.2 K=22500  karp_luby_estimate=9.99889  elapsed=1009.02 ms
+# [bob]   file=bob.dnf  VARS=4 CUBES=2  epsilon=0.2 K=22500  karp_luby_estimate=9.99889  elapsed=1008.77 ms
+# Network statistics:
+#   sent:   192282741 B (183.38 MiB)
+#   recv:   4212749 B (4.02 MiB)
+#   ...
+```
+
+(`karp_luby_estimate=9.99889` here, much tighter than the `K=3` demo's
+noisy `5`/`8.33`/`13.33` across separate runs -- exactly what `K=22500`
+independent trials buys: the estimator's variance actually shrinking, per
+`karp_luby_trials`'s whole point.)
+
+To benchmark a different `epsilon`, `VARS`, or `CUBES`, edit the
+`constexpr` constants at the top of `bench_karp_luby.cpp` and rebuild --
+they're compile-time, like every other circuit-shape constant in this
+codebase (see "Putting it together"), so there's no runtime flag for them.
+
 ## Layout
 
 - `CMakeLists.txt` -- finds/links `emp-tool`, `emp-ot`, `emp-sh2pc`, OpenSSL, GMP.
-- `src/main.cpp` -- the two-party DNF-intersection-counting pipeline (see "Putting it together").
+- `src/main.cpp` -- interactive two-party demo (small fixed `K`) of the pipeline below (see "Putting it together").
+- `src/pipeline/` -- the two-party circuit itself, shared by `main.cpp` and `src/bench/`:
+  - `karp_luby_pipeline.h` -- `run_karp_luby_pipeline<VARS,CUBES,K>`, `SH2PCSession`-only (not `Ctx`-generic like `gadgets/`).
+- `src/bench/` -- benchmarks, following emp-toolkit's own `bench_<component>.cpp` convention (see "Benchmarks"):
+  - `bench_karp_luby.cpp` -- times the real circuit at the `K` a target epsilon requires.
 - `src/utils/` -- data-prep helpers with no emp-tool dependency:
   - `dimacs_dnf.h` -- the DIMACS-DNF cube parser (header-only: `parse<VARS,CUBES>` is a template).
 - `src/gadgets/` -- Ctx-generic circuit gadgets, reusable across sessions:
@@ -538,5 +616,5 @@ a whole now needs emp-tool too.
   - `karp_luby/` -- tests for `gadgets/karp_luby/`:
     - `select_cube_test.cpp`, `random_assignment_test.cpp`, `count_satisfied_cubes_test.cpp`, `divide_lookup_test.cpp`, `karp_luby_estimate_test.cpp` (all `emp::ClearSession`-based, no network).
 - `sample.dnf` -- a standalone example DIMACS-DNF file (used by `dimacs_dnf_test.cpp`'s docs, not read by any binary).
-- `alice.dnf` / `bob.dnf` -- the two parties' example private inputs to `main.cpp`.
+- `alice.dnf` / `bob.dnf` -- the two parties' example private inputs to `main.cpp` and `bench_karp_luby`.
 - `run.sh` -- launches both parties of `sh2pc_demo` locally for a quick check.
