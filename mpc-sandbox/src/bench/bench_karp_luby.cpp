@@ -88,6 +88,40 @@ std::string format_bytes(uint64_t bytes) {
     return std::string(buf);
 }
 
+// us -> the largest whole unit that keeps it readable (us/ms/s/min/h) --
+// std::ostream's default double formatting switches to scientific
+// notation past ~1e6 (e.g. "1.07004e+06 ms" for VARS=16's ~18-minute
+// elapsed time), which is exactly the un-readable case this avoids.
+std::string format_duration(double us) {
+    if (us < 1000.0) {
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "%.2f us", us);
+        return std::string(buf);
+    }
+    double ms = us / 1000.0;
+    if (ms < 1000.0) {
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "%.2f ms", ms);
+        return std::string(buf);
+    }
+    double s = ms / 1000.0;
+    if (s < 60.0) {
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "%.2f s", s);
+        return std::string(buf);
+    }
+    double min = s / 60.0;
+    if (min < 60.0) {
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "%.2f min", min);
+        return std::string(buf);
+    }
+    double h = min / 60.0;
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%.2f h", h);
+    return std::string(buf);
+}
+
 // Prints breakdown's phases (network bytes) and mem's structures (static
 // sizes), each sorted biggest-first, so "which gadget dominates" is
 // readable at a glance rather than requiring the reader to scan/sum
@@ -144,7 +178,7 @@ void run_one(SH2PCSession& sess, NetIO* io, const std::string& path, const std::
     std::cout << who << " VARS=" << VARS << " CUBES=" << CUBES
               << "  epsilon=" << EPSILON << " delta=" << DELTA << " K=" << K
               << "  estimate=" << estimate
-              << "  elapsed=" << (elapsed_us / 1000.0) << " ms"
+              << "  elapsed=" << format_duration(elapsed_us)
               << "  sent=" << format_bytes(sent) << " recv=" << format_bytes(recv) << " rounds=" << rounds
               << std::endl;
 

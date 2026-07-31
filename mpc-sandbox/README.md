@@ -657,11 +657,16 @@ varies run to run, since it depends on fresh joint-random samples each
 time):
 
 ```sh
-# [alice] VARS=4 CUBES=4  epsilon=0.8 delta=0.2 K=1758  estimate=9.87486  elapsed=183.536 ms  sent=67.31 MiB recv=259.20 KiB rounds=7035
+# [alice] VARS=4 CUBES=4  epsilon=0.8 delta=0.2 K=1758  estimate=9.98862  elapsed=176.39 ms  sent=67.31 MiB recv=259.20 KiB rounds=7035
 ```
 
 (Both parties print matching lines for every size -- confirmed by running
-it live: Alice and Bob agree exactly on `estimate`.)
+it live: Alice and Bob agree exactly on `estimate`. `elapsed` is formatted
+by `format_duration()`, picking the largest readable unit -- us/ms/s/min/h
+-- rather than always printing milliseconds: at `VARS=16`'s multi-minute
+runtime, a raw `elapsed_us/1000.0` in milliseconds prints in
+`std::ostream`'s default scientific notation past `~1e6`, e.g.
+`elapsed=1.07004e+06 ms`, exactly the unreadable case this avoids.)
 
 **Per-gadget breakdown.** Each size's summary line is followed by two
 sorted (biggest-first) tables answering "which gadget dominates" --
