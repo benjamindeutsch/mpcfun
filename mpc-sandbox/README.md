@@ -680,9 +680,11 @@ program's output, so bytes aren't reported two different ways in the same
 console dump:
 
 ```sh
-# [alice]     [net]  select_cube: sent=33.05 MiB recv=0.00 B total=33.05 MiB
 # [alice]     [net]  divide_lookup: sent=17.70 MiB recv=0.00 B total=17.70 MiB
+# [alice]     [net]  select_cube_index: sent=16.42 MiB recv=0.00 B total=16.42 MiB
 # [alice]     [net]  count_satisfied_cubes: sent=14.59 MiB recv=0.00 B total=14.59 MiB
+# [alice]     [net]  cube_at_index: sent=10.46 MiB recv=0.00 B total=10.46 MiB
+# [alice]     [net]  sample_in_range: sent=6.17 MiB recv=0.00 B total=6.17 MiB
 # [alice]     [net]  karp_luby_estimate: sent=1.49 MiB recv=0.00 B total=1.49 MiB
 # [alice]     [net]  random_assignment: sent=439.50 KiB recv=0.00 B total=439.50 KiB
 # [alice]     [net]  trial_random_input_feeding: sent=0.00 B recv=259.15 KiB total=259.15 KiB
@@ -701,26 +703,31 @@ console dump:
 ```
 
 (`VARS=4` above, `K=1758` -- bandwidth is dominated by the per-trial
-gadgets (`select_cube`/`divide_lookup`/`count_satisfied_cubes`), each
-running `K` times, while memory is dominated by `reciprocals`, the one
-structure that's actually `K`-sized. Since this sweep now keeps `M` small
-throughout (`CUBES<=16`, so `M<=256`) while `K` grows large (real epsilon/
-delta demands it), `reciprocals` and the per-trial gadgets dominate at
-every size in this sweep -- unlike the earlier five-size sweep, where
-`VARS=64`'s tiny `K=48` let the `M`-sized structures
-(`conjunction`/`intervals`/`weights`) take over instead. Which gadget
-"wins" depends on which of `K` or `M` a given point favors, which is why
-both get reported per size instead of just once.)
+gadgets, each running `K` times: `select_cube`'s three pieces
+(`sample_in_range`/`select_cube_index`/`cube_at_index`, called directly
+in `pipeline/karp_luby_pipeline.h` rather than through the composed
+`select_cube()`, specifically so each gets its own breakdown entry
+instead of one combined bucket) together roughly match
+`divide_lookup`/`count_satisfied_cubes`, while memory is dominated by
+`reciprocals`, the one structure that's actually `K`-sized. Since this
+sweep now keeps `M` small throughout (`CUBES<=16`, so `M<=256`) while `K`
+grows large (real epsilon/delta demands it), `reciprocals` and the
+per-trial gadgets dominate at every size in this sweep -- unlike the
+earlier five-size sweep, where `VARS=64`'s tiny `K=48` let the `M`-sized
+structures (`conjunction`/`intervals`/`weights`) take over instead. Which
+gadget "wins" depends on which of `K` or `M` a given point favors, which
+is why both get reported per size instead of just once.)
 
 **Network breakdown** (`PipelineBreakdown`, `pipeline/karp_luby_pipeline.h`)
 wraps each gadget call in a `measure(io, breakdown, name, fn)` helper that
 snapshots `io->send_counter`/`recv_counter` before and after, the same
 before/after pattern the top-level per-size numbers already use (see
 above) -- just at finer granularity, one snapshot per gadget instead of
-one for the whole pipeline. Per-trial gadgets (`select_cube`,
-`random_assignment`, `count_satisfied_cubes`, `divide_lookup`) accumulate
-into the *same* named entry across all `K` trials, so e.g. `select_cube`'s
-number is that gadget's total over the whole run, not one trial's share.
+one for the whole pipeline. Per-trial gadgets (`sample_in_range`,
+`select_cube_index`, `cube_at_index`, `random_assignment`,
+`count_satisfied_cubes`, `divide_lookup`) accumulate into the *same*
+named entry across all `K` trials, so e.g. `sample_in_range`'s number is
+that gadget's total over the whole run, not one trial's share.
 `run_karp_luby_pipeline`'s `io`/`breakdown` parameters both default to
 `nullptr`; `src/main.cpp` never passes either, so `measure()` degrades to
 a plain direct call there -- the demo pays nothing for this.

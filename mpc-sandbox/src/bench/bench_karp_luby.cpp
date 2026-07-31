@@ -216,6 +216,7 @@ int main(int argc, char** argv) {
     run_one<4>(sess, io.get(), path, who);
     run_one<8>(sess, io.get(), path, who);
     run_one<16>(sess, io.get(), path, who);
+    run_one<32>(sess, io.get(), path, who);
 
     sess.finalize();
     return 0;

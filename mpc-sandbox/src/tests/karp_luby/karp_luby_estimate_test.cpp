@@ -25,19 +25,6 @@ using Ctx = ClearSession::ctx_t;
 using W = DnfWeight<Ctx, N, M>;
 using R = DivideLookupResult<Ctx, M>;
 
-// karp_luby_trials(vars, epsilon, delta) = ceil((1/delta)*(vars^2-1)^2/epsilon^2),
-// checked against three hand-computed cases: two at delta=0.25 (probability
-// >= 3/4, this function's original form, constant folds to 4) that are
-// exactly representable (no rounding): vars=4,epsilon=0.5 -> vars^2-1=15,
-// 4*15^2/0.5^2 = 4*225/0.25 = 3600; vars=2,epsilon=1.0 -> vars^2-1=3,
-// 4*3^2/1^2 = 36. The third matches ApproxMC's own defaults
-// (epsilon=0.8, delta=0.2 -- see src/bench/bench_karp_luby.cpp):
-// vars=4 -> vars^2-1=15, (1/0.2)*15^2/0.8^2 = 5*225/0.64 = 1757.8125,
-// rounded up to 1758.
-static_assert(karp_luby_trials(4, 0.5, 0.25) == 3600, "K for vars=4, epsilon=0.5, delta=0.25 should be 3600");
-static_assert(karp_luby_trials(2, 1.0, 0.25) == 36, "K for vars=2, epsilon=1.0, delta=0.25 should be 36");
-static_assert(karp_luby_trials(4, 0.8, 0.2) == 1758, "K for vars=4, epsilon=0.8, delta=0.2 (ApproxMC defaults) should be 1758");
-
 void check(ClearSession& sess, const char* name, uint64_t weight_val,
            const std::array<uint64_t, K>& reciprocal_vals, uint64_t expect) {
     W weight = sess.input<W>(PUBLIC, weight_val);

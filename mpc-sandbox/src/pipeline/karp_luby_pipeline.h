@@ -208,7 +208,7 @@ unsigned __int128 run_karp_luby_pipeline(SH2PCSession& sess, const dimacs_dnf::D
     // shrink with K. Nothing about any trial is revealed -- only the final
     // combined estimate is, below. Per-trial breakdown entries accumulate
     // across all K trials (see PipelineBreakdown::add above), so e.g.
-    // "select_cube" ends up as that gadget's total over the whole run.
+    // "sample_in_range" ends up as that gadget's total over the whole run.
     using RandBits = SampleBits<Ctx, VARS, PRODUCT>;
     array<DivideLookupResult<Ctx, PRODUCT>, K> reciprocals{};
 
@@ -221,8 +221,18 @@ unsigned __int128 run_karp_luby_pipeline(SH2PCSession& sess, const dimacs_dnf::D
         RandBits bob_r   = sess.input<RandBits>(BOB,   my_random_bits);
         if (breakdown) breakdown->add("trial_random_input_feeding", io->send_counter - trial_input_sent0, io->recv_counter - trial_input_recv0);
 
-        CubeData<Ctx, VARS> selected = measure(io, breakdown, "select_cube", [&] {
-            return select_cube<Ctx, VARS, PRODUCT>(alice_r, bob_r, total, intervals, conjunction);
+        // select_cube's three pieces (gadgets/karp_luby/select_cube.h),
+        // called directly instead of through the composed select_cube()
+        // so each gets its own breakdown entry rather than being lumped
+        // into one "select_cube" bucket.
+        TotalWeight z = measure(io, breakdown, "sample_in_range", [&] {
+            return sample_in_range<Ctx, VARS, PRODUCT>(alice_r, bob_r, total);
+        });
+        CubeIndex<Ctx, PRODUCT> index = measure(io, breakdown, "select_cube_index", [&] {
+            return select_cube_index<Ctx, VARS, PRODUCT>(z, intervals);
+        });
+        CubeData<Ctx, VARS> selected = measure(io, breakdown, "cube_at_index", [&] {
+            return cube_at_index<Ctx, VARS, PRODUCT>(index, conjunction);
         });
 
         // Extend the selected cube into a full random satisfying

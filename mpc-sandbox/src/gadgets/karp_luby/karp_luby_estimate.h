@@ -35,33 +35,44 @@
 
 namespace gadgets {
 
-// karp_luby_trials(vars, epsilon, delta): the number of independent trials
-// K a caller needs (see gadgets/karp_luby/select_cube.h/random_assignment.h/
-// count_satisfied_cubes.h/divide_lookup.h and karp_luby_estimate() above)
-// for the resulting Karp-Luby estimate to be within relative error epsilon
-// of the true count with probability >= 1-delta:
+// ln(x) for finite x > 0, usable in constant expressions (C++14).
+constexpr double const_log(double x) {
+  int e = 0;
+  while (x >= 2.0) { x *= 0.5; ++e; }
+  while (x <  1.0) { x *= 2.0; --e; }
+  const double z = (x - 1.0) / (x + 1.0), z2 = z * z;   // |z| <= 1/3
+  double term = z, sum = z;
+  for (int k = 3; k < 40; k += 2) { term *= z2; sum += term / k; }
+  return 2.0 * sum + e * 0.69314718055994530942;
+}
+
+// K = ceil( min( (1/delta), 3*ln(2/delta) ) * (S/W_max - 1) / epsilon^2 )
 //
-//   K = ceil((1/delta) * (vars^2 - 1)^2 / epsilon^2)
+// Karp-Luby: with X_t = 1/cov(a_t) in [0,1] and mu = E[X_t] = |U|/S,
+//   Var(X_t) <= E[X_t^2] - mu^2 <= mu - mu^2   (since X_t <= 1)
+// so Var/mu^2 <= 1/mu - 1 = S/|U| - 1 <= S/W_max - 1 <= N - 1,
+// where N is the number of cubes in the CONJOINED dnf (cubes_a*cubes_b)
+// and W_max is the largest single cube weight. The bound is linear in
+// N, not quadratic -- that linearity IS the Karp-Luby theorem.
 //
-// From Chebyshev: Pr[bad] <= Var/(epsilon^2 * mean^2) <= (vars^2-1)^2 /
-// (K * epsilon^2) (the variance bound is exactly what makes the estimator
-// work -- see the file comment above), so requiring that <= delta gives
-// the K above. delta=1/4 (the constant folds to 4) was this function's
-// first form, for probability >= 3/4; delta is now an explicit parameter
-// so any target confidence -- e.g. ApproxMC's own defaults, epsilon=0.8,
-// delta=0.2 (see tests/karp_luby/karp_luby_estimate_test.cpp and
-// src/bench/bench_karp_luby.cpp) -- can be plugged in directly.
-//
-// A plain host-side compile-time calculation (no Ctx/wires involved,
-// unlike everything else in this file) -- callers use it to pick K, e.g.
-// `constexpr int K = karp_luby_trials(VARS, 0.1, 0.25);`, then pass that K
-// on to karp_luby_estimate<Ctx,N,M,K> and every other K-templated gadget
-// above.
-constexpr int karp_luby_trials(int vars, double epsilon, double delta) {
-    double m = (double)vars * (double)vars - 1.0;
-    double k = (1.0 / delta) * m * m / (epsilon * epsilon);
-    int ik = (int)k;
-    return (k > (double)ik) ? ik + 1 : ik;  // ceiling
+// Chebyshev gives the 1/delta form; since the summands are i.i.d. in
+// [0,1], multiplicative Chernoff gives the 3*ln(2/delta) form, which
+// wins for delta < ~0.15. Take whichever is smaller.
+constexpr int karp_luby_trials(double variance_ratio,  // S/W_max - 1, or N-1
+                               double epsilon, double delta) {
+  const double chebyshev = 1.0 / delta;
+  const double chernoff  = 3.0 * const_log(2.0 / delta);
+  const double c = (chebyshev < chernoff) ? chebyshev : chernoff;
+  const double k = c * variance_ratio / (epsilon * epsilon);
+  const int ik = (int)k;
+  return (k > (double)ik) ? ik + 1 : ik;
+}
+
+// Conservative wrapper when S and W_max aren't available at compile time.
+constexpr int karp_luby_trials(int cubes,
+                               double epsilon, double delta) {
+  return karp_luby_trials((double)cubes * (double)cubes - 1.0,
+                          epsilon, delta);
 }
 
 // Wide enough for the raw sum of K reciprocal-lookup terms, each at most
