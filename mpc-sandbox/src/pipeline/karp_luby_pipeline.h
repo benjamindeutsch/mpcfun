@@ -15,6 +15,15 @@
 // Not Ctx-generic like the gadgets/ headers -- this is SH2PCSession-only
 // (it does real network I/O via sess.input/sess.reveal), unlike the pure
 // wire-level gadgets it calls, which stay testable under ClearSession.
+//
+// Returns an unsigned __int128, not a uint64_t: emp::UInt_T<Ctx,N>'s
+// clear_t is a plain uint64_t (a hard emp-toolkit ceiling -- .reveal()/
+// .input()/.constant(uint64_t) on a UInt_T literally cannot round-trip
+// more than 64 bits), but KarpLubyEstimate<Ctx,VARS,PRODUCT,K>'s width is
+// (VARS + bits_for(PRODUCT)) + (kDivideLookupScaleBits+1) + bits_for(K) --
+// comfortably under 64 bits at VARS=16 (52 bits), but over it by VARS=32
+// (68 bits) and further over by VARS=64 (100 bits). See reveal_wide()
+// below for how the final reveal handles that.
 
 #pragma once
 
@@ -34,8 +43,11 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <string>
+#include <vector>
 
 using emp::SH2PCSession;
+using emp::NetIO;
 using emp::BitVec_T;
 using emp::Bit_T;
 using emp::PRG;
@@ -45,8 +57,110 @@ using emp::PUBLIC;
 
 using Ctx = SH2PCSession::ctx_t;
 
+// PipelineBreakdown: per-gadget network bytes, for callers that want to
+// see which gadget dominates bandwidth (see src/bench/bench_karp_luby.cpp)
+// rather than just the pipeline's total. Not used by src/main.cpp, which
+// never constructs one -- run_karp_luby_pipeline's breakdown/io parameters
+// default to nullptr, so that call site pays nothing for this.
+struct PipelineBreakdown {
+    struct Phase {
+        std::string name;
+        uint64_t sent = 0;
+        uint64_t recv = 0;
+    };
+    std::vector<Phase> phases;
+
+    // Accumulates into the named phase (creating it on first use) --
+    // per-trial gadgets (select_cube, random_assignment, ...) call this
+    // once per Karp-Luby trial, so the same name's bytes sum across all K.
+    void add(const char* name, uint64_t sent, uint64_t recv) {
+        for (auto& p : phases) {
+            if (p.name == name) {
+                p.sent += sent;
+                p.recv += recv;
+                return;
+            }
+        }
+        phases.push_back(Phase{name, sent, recv});
+    }
+};
+
+// measure(io, breakdown, name, fn): runs fn() and returns its result;
+// if breakdown is non-null, also records the NetIO bytes fn() sent/
+// received under `name` (io must be non-null whenever breakdown is).
+// A no-op wrapper (just fn()) when breakdown is null.
+template <class Fn>
+auto measure(NetIO* io, PipelineBreakdown* breakdown, const char* name, Fn&& fn) -> decltype(fn()) {
+    if (!breakdown) return fn();
+    uint64_t sent0 = io->send_counter, recv0 = io->recv_counter;
+    auto result = fn();
+    breakdown->add(name, io->send_counter - sent0, io->recv_counter - recv0);
+    return result;
+}
+
+// PipelineMemoryReport: each pipeline structure's exact byte size
+// (sizeof(type) * count), computed statically -- not measured at runtime.
+// Runtime process memory (e.g. getrusage().ru_maxrss) wouldn't give a
+// meaningful per-gadget breakdown here: most of what a gadget allocates is
+// stack space freed the moment its function returns, and RSS is a
+// cumulative high-water mark that doesn't cleanly reset between phases.
+// The sizes below are exactly what each structure occupies while it's
+// alive, known from its type alone.
+struct PipelineMemoryReport {
+    struct Entry {
+        std::string name;
+        uint64_t bytes;
+    };
+    std::vector<Entry> entries;
+
+    void add(const char* name, uint64_t bytes) { entries.push_back(Entry{name, bytes}); }
+};
+
 template <int VARS, int CUBES, int K>
-uint64_t run_karp_luby_pipeline(SH2PCSession& sess, const dimacs_dnf::Dnf<VARS, CUBES>& my_dnf) {
+PipelineMemoryReport pipeline_memory_report() {
+    using namespace gadgets;
+    constexpr int PRODUCT = CUBES * CUBES;
+    using TotalWeight = DnfWeight<Ctx, VARS, PRODUCT>;
+
+    PipelineMemoryReport r;
+    r.add("alice_cubes + bob_cubes", 2ull * (uint64_t)CUBES * sizeof(CircuitCube<Ctx, VARS>));
+    r.add("conjunction (conjoin_dnf's output)", (uint64_t)PRODUCT * sizeof(CircuitCube<Ctx, VARS>));
+    r.add("weights (cube_weights' output)", (uint64_t)PRODUCT * sizeof(CubeWeight<Ctx, VARS>));
+    r.add("intervals (cube_intervals' output)", (uint64_t)(PRODUCT + 1) * sizeof(TotalWeight));
+    r.add("reciprocals (K divide_lookup outputs)", (uint64_t)K * sizeof(DivideLookupResult<Ctx, PRODUCT>));
+    r.add("one trial's live locals (selected/assignment/satisfied_count)",
+          sizeof(CubeData<Ctx, VARS>) + 2 * sizeof(BitVec_T<Ctx, VARS>) + sizeof(SatisfiedCount<Ctx, PRODUCT>));
+    return r;
+}
+
+// reveal_wide<W>(sess, value, PUBLIC): like sess.reveal(value,
+// PUBLIC).value(), but works for W > 64 -- emp::UInt_T<Ctx,W>'s clear_t is
+// uint64_t, so .reveal() only round-trips W <= 64 directly (see this
+// file's top comment). Slices value into a low 64-bit chunk and a high
+// (W-64)-bit chunk (UInt_T::slice<Lo,Hi>, pure wiring -- no extra gates),
+// reveals each separately (recursing again if the high chunk is itself
+// still over 64 bits), and reassembles them into an unsigned __int128 in
+// plaintext -- wide enough for every width this pipeline produces, up to
+// VARS=64's 100 bits. Scoped to PUBLIC reveals only (every caller in this
+// file only ever needs that); ALICE/BOB/XOR aren't handled.
+template <int W>
+unsigned __int128 reveal_wide(SH2PCSession& sess, const emp::UInt_T<Ctx, W>& value) {
+    if constexpr (W <= 64) {
+        return (unsigned __int128)sess.reveal(value, PUBLIC).value();
+    } else {
+        unsigned __int128 lo = reveal_wide<64>(sess, value.template slice<0, 64>());
+        unsigned __int128 hi = reveal_wide<W - 64>(sess, value.template slice<64, W>());
+        return lo | (hi << 64);
+    }
+}
+
+// io/breakdown: optional, both default nullptr -- pass both together (from
+// src/bench/bench_karp_luby.cpp) to get a per-gadget network breakdown (see
+// PipelineBreakdown above); src/main.cpp passes neither, so every
+// measure() call below is a plain, zero-overhead direct call there.
+template <int VARS, int CUBES, int K>
+unsigned __int128 run_karp_luby_pipeline(SH2PCSession& sess, const dimacs_dnf::Dnf<VARS, CUBES>& my_dnf,
+                                          NetIO* io = nullptr, PipelineBreakdown* breakdown = nullptr) {
     using namespace gadgets;
     using BV = BitVec_T<Ctx, VARS>;
     constexpr int PRODUCT = CUBES * CUBES;
@@ -56,6 +170,8 @@ uint64_t run_karp_luby_pipeline(SH2PCSession& sess, const dimacs_dnf::Dnf<VARS, 
     // toolkit, only the named owner's argument is actually used (see
     // SH2PCSession::input), so each process just passes its own local
     // my_dnf data regardless of which owner it's calling for.
+    uint64_t cube_input_sent0 = breakdown ? io->send_counter : 0;
+    uint64_t cube_input_recv0 = breakdown ? io->recv_counter : 0;
     array<CircuitCube<Ctx, VARS>, CUBES> alice_cubes{};
     array<CircuitCube<Ctx, VARS>, CUBES> bob_cubes{};
     for (int i = 0; i < CUBES; ++i) {
@@ -71,54 +187,74 @@ uint64_t run_karp_luby_pipeline(SH2PCSession& sess, const dimacs_dnf::Dnf<VARS, 
             sess.input<Bit_T<Ctx>>(BOB, mine.pad),
         };
     }
+    if (breakdown) breakdown->add("cube_input_feeding", io->send_counter - cube_input_sent0, io->recv_counter - cube_input_recv0);
 
     array<CircuitCube<Ctx, VARS>, PRODUCT> conjunction =
-        conjoin_dnf<Ctx, VARS, CUBES>(alice_cubes, bob_cubes);
+        measure(io, breakdown, "conjoin_dnf", [&] { return conjoin_dnf<Ctx, VARS, CUBES>(alice_cubes, bob_cubes); });
     array<CubeWeight<Ctx, VARS>, PRODUCT> weights =
-        cube_weights<Ctx, VARS, PRODUCT>(conjunction);
+        measure(io, breakdown, "cube_weights", [&] { return cube_weights<Ctx, VARS, PRODUCT>(conjunction); });
 
     using TotalWeight = DnfWeight<Ctx, VARS, PRODUCT>;
     constexpr int TotalWidth = TotalWeight::width();
 
-    TotalWeight total = dnf_weight<Ctx, VARS, PRODUCT>(weights);
+    TotalWeight total = measure(io, breakdown, "dnf_weight", [&] { return dnf_weight<Ctx, VARS, PRODUCT>(weights); });
     array<TotalWeight, PRODUCT + 1> intervals =
-        cube_intervals<Ctx, VARS, PRODUCT>(weights);
+        measure(io, breakdown, "cube_intervals", [&] { return cube_intervals<Ctx, VARS, PRODUCT>(weights); });
 
     // K independent Karp-Luby trials. Each trial draws its own fresh joint
     // randomness (both for select_cube's sampling step and for
     // random_assignment's free-variable fill), so the K samples are
     // independent -- required for the estimator's variance to actually
     // shrink with K. Nothing about any trial is revealed -- only the final
-    // combined estimate is, below.
+    // combined estimate is, below. Per-trial breakdown entries accumulate
+    // across all K trials (see PipelineBreakdown::add above), so e.g.
+    // "select_cube" ends up as that gadget's total over the whole run.
     using RandBits = SampleBits<Ctx, VARS, PRODUCT>;
     array<DivideLookupResult<Ctx, PRODUCT>, K> reciprocals{};
 
     for (int t = 0; t < K; ++t) {
+        uint64_t trial_input_sent0 = breakdown ? io->send_counter : 0;
+        uint64_t trial_input_recv0 = breakdown ? io->recv_counter : 0;
         array<bool, (size_t)TotalWidth> my_random_bits{};
         PRG().random_bool(my_random_bits.data(), TotalWidth);
         RandBits alice_r = sess.input<RandBits>(ALICE, my_random_bits);
         RandBits bob_r   = sess.input<RandBits>(BOB,   my_random_bits);
-        CubeData<Ctx, VARS> selected =
-            select_cube<Ctx, VARS, PRODUCT>(alice_r, bob_r, total, intervals, conjunction);
+        if (breakdown) breakdown->add("trial_random_input_feeding", io->send_counter - trial_input_sent0, io->recv_counter - trial_input_recv0);
+
+        CubeData<Ctx, VARS> selected = measure(io, breakdown, "select_cube", [&] {
+            return select_cube<Ctx, VARS, PRODUCT>(alice_r, bob_r, total, intervals, conjunction);
+        });
 
         // Extend the selected cube into a full random satisfying
         // assignment (gadgets/karp_luby/random_assignment.h): a second,
         // independent joint random bitstring (same free-XOR construction,
         // drawn/fed the same way) fills in whatever the cube leaves
         // unconstrained.
+        uint64_t assign_input_sent0 = breakdown ? io->send_counter : 0;
+        uint64_t assign_input_recv0 = breakdown ? io->recv_counter : 0;
         array<bool, VARS> my_assignment_bits{};
         PRG().random_bool(my_assignment_bits.data(), VARS);
         BV assignment_alice_r = sess.input<BV>(ALICE, my_assignment_bits);
         BV assignment_bob_r   = sess.input<BV>(BOB,   my_assignment_bits);
-        BV assignment = random_assignment<Ctx, VARS>(selected, assignment_alice_r, assignment_bob_r);
+        if (breakdown) breakdown->add("trial_random_input_feeding", io->send_counter - assign_input_sent0, io->recv_counter - assign_input_recv0);
 
-        SatisfiedCount<Ctx, PRODUCT> satisfied_count =
-            count_satisfied_cubes<Ctx, VARS, PRODUCT>(assignment, conjunction);
-        reciprocals[(size_t)t] = divide_lookup<Ctx, PRODUCT>(satisfied_count);
+        BV assignment = measure(io, breakdown, "random_assignment", [&] {
+            return random_assignment<Ctx, VARS>(selected, assignment_alice_r, assignment_bob_r);
+        });
+
+        SatisfiedCount<Ctx, PRODUCT> satisfied_count = measure(io, breakdown, "count_satisfied_cubes", [&] {
+            return count_satisfied_cubes<Ctx, VARS, PRODUCT>(assignment, conjunction);
+        });
+        reciprocals[(size_t)t] = measure(io, breakdown, "divide_lookup", [&] {
+            return divide_lookup<Ctx, PRODUCT>(satisfied_count);
+        });
     }
 
-    KarpLubyEstimate<Ctx, VARS, PRODUCT, K> estimate =
-        karp_luby_estimate<Ctx, VARS, PRODUCT, K>(total, reciprocals);
+    KarpLubyEstimate<Ctx, VARS, PRODUCT, K> estimate = measure(io, breakdown, "karp_luby_estimate", [&] {
+        return karp_luby_estimate<Ctx, VARS, PRODUCT, K>(total, reciprocals);
+    });
 
-    return sess.reveal(estimate, PUBLIC).value();
+    return measure(io, breakdown, "reveal", [&] {
+        return reveal_wide<KarpLubyEstimate<Ctx, VARS, PRODUCT, K>::width()>(sess, estimate);
+    });
 }

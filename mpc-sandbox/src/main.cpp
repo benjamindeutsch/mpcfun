@@ -75,7 +75,12 @@ int main(int argc, char** argv) {
 
     SH2PCSession sess(io.get(), party);
 
-    uint64_t estimate_raw_out = run_karp_luby_pipeline<VARS, CUBES, K>(sess, my_dnf);
+    // unsigned __int128, not uint64_t: run_karp_luby_pipeline's return
+    // type has to accommodate every VARS bench_karp_luby.cpp's sweep uses
+    // (up to 100 bits at VARS=64), even though this demo's own VARS=4
+    // result always fits safely in far fewer bits -- see
+    // pipeline/karp_luby_pipeline.h's top comment.
+    unsigned __int128 estimate_raw_out = run_karp_luby_pipeline<VARS, CUBES, K>(sess, my_dnf);
 
     sess.finalize();
 
@@ -87,7 +92,7 @@ int main(int argc, char** argv) {
 
     std::string who = (party == ALICE) ? "[alice]" : "[bob]  ";
     std::cout << who << " file=" << path
-              << "  karp_luby_estimate_raw=" << estimate_raw_out
+              << "  karp_luby_estimate_raw=" << (uint64_t)estimate_raw_out
               << "  (K=" << K << ", scale=" << scale << ")"
               << "  karp_luby_estimate=" << karp_luby_estimate_value << std::endl;
 

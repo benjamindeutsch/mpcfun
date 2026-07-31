@@ -21,10 +21,10 @@ constexpr int M = 4;
 using Ctx = ClearSession::ctx_t;
 using Count = SatisfiedCount<Ctx, M>;
 
-// lcm(1,2,3,4) = 12, computed at compile time -- checked here against the
-// hand computation so a change to lookup_scale's algorithm can't silently
-// drift from what the rest of this test assumes.
-static_assert(lookup_scale<M>() == 12, "lcm(1,2,3,4) should be 12");
+// SCALE = 2^16 = 65536, checked here against the hand computation so a
+// change to kDivideLookupScaleBits can't silently drift from what the
+// rest of this test assumes.
+static_assert(lookup_scale<M>() == 65536, "SCALE should be 2^16 = 65536");
 
 void check(ClearSession& sess, const char* name, uint64_t index, uint64_t expect) {
     Count idx = sess.input<Count>(PUBLIC, index);
@@ -42,11 +42,13 @@ void check(ClearSession& sess, const char* name, uint64_t index, uint64_t expect
 int run_divide_lookup_tests() {
     ClearSession sess;
 
-    // SCALE = lcm(1,2,3,4) = 12; every entry is SCALE/index, exactly.
-    check(sess, "divide_lookup(1) = 12/1 = 12", 1, 12);
-    check(sess, "divide_lookup(2) = 12/2 = 6", 2, 6);
-    check(sess, "divide_lookup(3) = 12/3 = 4", 3, 4);
-    check(sess, "divide_lookup(4) = 12/4 = 3", 4, 3);
+    // SCALE = 65536; every entry is round(SCALE/index) -- exact for
+    // index=1,2,4 (which divide SCALE evenly), rounded for index=3
+    // (65536/3 = 21845.33... -> 21845).
+    check(sess, "divide_lookup(1) = round(65536/1) = 65536", 1, 65536);
+    check(sess, "divide_lookup(2) = round(65536/2) = 32768", 2, 32768);
+    check(sess, "divide_lookup(3) = round(65536/3) = 21845", 3, 21845);
+    check(sess, "divide_lookup(4) = round(65536/4) = 16384", 4, 16384);
 
     std::printf("divide_lookup_test: all checks passed\n");
     return 0;

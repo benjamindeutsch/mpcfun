@@ -66,8 +66,8 @@ both args optional -- default to the bundled `alice.dnf`/`bob.dnf`):
 
 ```sh
 ./run.sh
-# [bob]   file=./bob.dnf  karp_luby_estimate_raw=180  (K=3, scale=12)  karp_luby_estimate=5
-# [alice] file=./alice.dnf  karp_luby_estimate_raw=180  (K=3, scale=12)  karp_luby_estimate=5
+# [bob]   file=./bob.dnf  karp_luby_estimate_raw=2621440  (K=3, scale=65536)  karp_luby_estimate=13.3333
+# [alice] file=./alice.dnf  karp_luby_estimate_raw=2621440  (K=3, scale=65536)  karp_luby_estimate=13.3333
 ```
 
 (`karp_luby_estimate_raw` is the only revealed value -- `total_weight * sum`
@@ -76,10 +76,12 @@ of the `K` trials' `divide_lookup` reciprocals (see "Divide lookup" and
 counting having stayed entirely private. Dividing that raw value by `K *
 scale` in plaintext (free, since both are public compile-time constants)
 gives the actual Karp-Luby estimate of the conjunction's true
-satisfying-assignment count -- `5` here, below `total_weight=20`, since
-these particular conjunction cubes overlap. Both parties always agree on
-it, but it varies run to run, since it depends on `K` fresh joint-random
-samples each time.)
+satisfying-assignment count -- `13.3` here, in the same ballpark as
+`total_weight=20`, since these particular conjunction cubes overlap only
+partially and `K=3` is far too few trials for a tight estimate (see
+"Benchmarks" below for what a real `K` looks like). Both parties always
+agree on it, but it varies run to run, since it depends on `K` fresh
+joint-random samples each time.)
 
 Alice listens on a fixed localhost port (default `12345`); Bob connects to
 it. Override with the `EMP_PORT` (port) and `EMP_PEER_IP` (Bob's target
@@ -347,18 +349,32 @@ which don't apply here) -- so this is the same equality-compare +
 just keyed by `count` instead of accumulating a sum.
 
 Since division isn't generally exact, the table stores a *fixed-point*
-reciprocal: `lookup_scale<M>() = lcm(1..M)` (computed at compile time via
-`constexpr` `gcd`/`lcm`), and `divide_lookup(count)` returns `scale /
-count` -- exact, no rounding, since `scale` is a multiple of every `count`
-in range by construction. A caller divides the *revealed* result by
-`scale` in plaintext to recover the true `1/count`; `scale` is a public
+reciprocal: `lookup_scale<M>()` returns a **fixed** `SCALE = 2^16 =
+65536`, the same for every `M`, and `divide_lookup(count)` returns
+`round(scale / count)`. An earlier version instead used `scale =
+lcm(1..M)` for *exact*, rounding-free reciprocals (a multiple of every
+`count` in range by construction) -- fine at the small `M=4` this
+pipeline first ran at, but it doesn't scale: by the prime number theorem,
+`lcm(1..M)`'s bit-length grows roughly linearly in `M` (`lcm(1..42)`
+alone already needs 58 bits), it overflows a `uint64_t` entirely around
+`M=47`, and even computed exactly via a bignum, every downstream
+reciprocal/sum/multiply would end up operating on thousands-of-bits-wide
+wires once `M` reaches the low thousands (see "Benchmarks" below, where
+`M` does) -- unusable. A fixed power-of-two `SCALE` keeps every table
+entry's width constant regardless of `M`, at the cost of making
+reciprocals approximate instead of exact: relative rounding error is at
+most `2^-16` per entry, utterly negligible next to the Karp-Luby
+estimator's own `O(1/sqrt(K))` sampling error at any `K` actually
+affordable to run. A caller divides the *revealed* result by `scale` in
+plaintext to recover the (approximate) `1/count`; `scale` is a public
 compile-time constant, so that division is free (no circuit gates spent
-on it). `DivideLookupResult<Ctx,M>` (`= UInt_T<Ctx, bits_for(scale)>`) is
-wide enough to hold the largest table entry, `scale` itself (`count=1`).
+on it). `DivideLookupResult<Ctx,M>` (`= UInt_T<Ctx, 17>`) is wide enough
+to hold the largest table entry, `scale` itself (`count=1`, the one case
+that needs no rounding) -- a fixed width, independent of `M`.
 
 Also tested via `emp::ClearSession` in `src/tests/karp_luby/divide_lookup_test.cpp`:
-`M=4` gives `scale=12` (`lcm(1,2,3,4)`), and checks `divide_lookup(1..4)
-== 12, 6, 4, 3`.
+checks `divide_lookup(1..4) == 65536, 32768, 21845, 16384` (exact for
+`1,2,4`, which divide `65536` evenly; rounded for `3`).
 
 ### Karp-Luby estimate
 
@@ -381,7 +397,13 @@ true_count`. `karp_luby_estimate<Ctx,N,M,K>(weight, reciprocals)` takes
 the `DnfWeight<Ctx,N,M>` total and a `std::array<DivideLookupResult<Ctx,M>,
 K>` of the `K` trials' reciprocals, and returns the raw product as a
 `KarpLubyEstimate<Ctx,N,M,K>` -- wide enough for the worst case via the
-usual zext-to-common-width-then-multiply/sum pattern.
+usual zext-to-common-width-then-multiply/sum pattern. The intermediate
+sum's width (`KarpLubySum<Ctx,M,K>`) is computed as `(kDivideLookupScaleBits
++ 1) + bits_for(K)` -- an *addition*, not `bits_for(K * lookup_scale<M>())`
+-- since that product can exceed `INT_MAX` well before `K` itself does,
+and `emp::kernel::bits_for` takes a plain `int`; the addition gives the
+same bound (summing `K` terms each under `2^(kDivideLookupScaleBits+1)`)
+without ever forming the oversized product just to truncate it.
 
 The actual unbiased estimate is `(this result) / (K *
 lookup_scale<M>())`: both `K` and the lookup scale are public compile-time
@@ -390,22 +412,30 @@ constants, so a caller does that division for free in plaintext on the
 
 Also tested via `emp::ClearSession` in
 `src/tests/karp_luby/karp_luby_estimate_test.cpp`, `N=4,M=4,K=3`: e.g.
-`weight=20, reciprocals=[12,6,3] -> 20*(12+6+3) = 420` (matching
-`main.cpp`'s real `dnf_weight=20`, and 3 trials with `count = 1, 2, 4`),
-and a degenerate `weight=0 -> estimate=0` regardless of the reciprocals.
+`weight=20, reciprocals=[65536,32768,16384] -> 20*114688 = 2293760`
+(matching `main.cpp`'s real `dnf_weight=20`, and 3 trials with `count =
+1, 2, 4`), and a degenerate `weight=0 -> estimate=0` regardless of the
+reciprocals.
 
-The same file also has `karp_luby_trials(vars, epsilon)` -- a plain
+The same file also has `karp_luby_trials(vars, epsilon, delta)` -- a plain
 host-side `constexpr` calculation (no `Ctx`/wires involved, unlike
 everything else in this file), *not* a circuit gadget: the number of
 trials `K` needed for the resulting estimate to be within relative error
-`epsilon` of the true count with probability `>= 3/4` (a Chebyshev/
-second-moment bound), `K = ceil(4 * (vars^2 - 1)^2 / epsilon^2)`. Callers
-pick `K` from this before touching any of the `K`-templated gadgets above
--- `src/bench/bench_karp_luby.cpp` does exactly that (see "Benchmarks"
-below); `src/main.cpp` doesn't, since its `K=3` is deliberately just a fast
-interactive smoke test, not a real accuracy guarantee. Checked against two
-hand-computed cases in `karp_luby_estimate_test.cpp`:
-`karp_luby_trials(4, 0.5) == 3600` and `karp_luby_trials(2, 1.0) == 36`.
+`epsilon` of the true count with probability `>= 1-delta` (a Chebyshev/
+second-moment bound), `K = ceil((1/delta) * (vars^2 - 1)^2 / epsilon^2)`.
+`delta` is an explicit parameter (rather than a fixed `1/4` baked into a
+constant `4`) precisely so real targets -- e.g.
+[ApproxMC](https://github.com/meelgroup/approxmc)'s own defaults,
+`epsilon=0.8, delta=0.2` -- can be plugged in directly; see "Benchmarks"
+below for why that matters and what it costs. Callers pick `K` from this
+before touching any of the `K`-templated gadgets above --
+`src/bench/bench_karp_luby.cpp` does exactly that; `src/main.cpp` doesn't,
+since its `K=3` is deliberately just a fast interactive smoke test, not a
+real accuracy guarantee. Checked against three hand-computed cases in
+`karp_luby_estimate_test.cpp`: `karp_luby_trials(4, 0.5, 0.25) == 3600` and
+`karp_luby_trials(2, 1.0, 0.25) == 36` (both at `delta=0.25`, i.e.
+probability `>= 3/4`, this function's original form), and
+`karp_luby_trials(4, 0.8, 0.2) == 1758` (ApproxMC's defaults).
 
 ## Putting it together
 
@@ -536,60 +566,183 @@ a whole now needs emp-tool too.
 ## Benchmarks
 
 `src/bench/bench_karp_luby.cpp` times the real two-party circuit
-(`pipeline/karp_luby_pipeline.h`, the same one `main.cpp` runs) at the `K`
-a target relative error `EPSILON` (currently `0.2`) actually requires with
-probability `>= 3/4` (`gadgets::karp_luby_trials(VARS, EPSILON)` -- see the
-"Karp-Luby estimate" section above), rather than `main.cpp`'s small fixed
-`K=3` smoke-test value.
+(`pipeline/karp_luby_pipeline.h`, the same one `main.cpp` runs) across a
+**sweep** of three sizes, `VARS=CUBES` doubling from `4` to `16`, all at a
+single **fixed, meaningful** epsilon/delta --
+[ApproxMC](https://github.com/meelgroup/approxmc)'s own defaults,
+`epsilon=0.8` (tolerance) and `delta=0.2` (failure probability, i.e.
+success probability `>= 1-delta = 0.8`) -- rather than `main.cpp`'s small
+fixed `K=3` smoke-test value, or an earlier version of this sweep that
+loosened epsilon per size just to stay fast (see below for why that
+changed).
 
 It follows emp-toolkit's own benchmark conventions
 (`emp-tool/docs/benchmark_conventions.md`) instead of a bespoke harness:
 named `bench_<component>.cpp`; the timed region is wrapped in
 `clock_start()`/`time_from()` (`emp-tool/runtime/core/utils.h`) around only
 the protocol call itself, excluding unrelated setup (the local DIMACS
-parse, the session/network handshake) so the reported time isn't billed
-for work the real protocol wouldn't count either. Network stats (bytes
-sent/received, communication rounds, buffer flushes) need no extra
-instrumentation -- they print automatically from `NetIO`'s own destructor
-whenever it isn't constructed `quiet` (the default both here and in
-`sh2pc_demo`).
+parse) so the reported time isn't billed for work the real protocol
+wouldn't count either. Per-size network bytes/rounds are captured the same
+way `emp-ot/bench/bench.h`'s `time_ot()` does -- an `io->send_counter` /
+`io->recv_counter` / `io->rounds` snapshot before and after each size's
+call, since one `NetIO` connection is reused across the whole sweep (its
+own end-of-process printout would only give a session-wide total).
+
+**Why the sweep stops at `VARS=16`, not `64`**:
+`K = ceil((1/delta)*(VARS^2-1)^2/epsilon^2)` (`gadgets::karp_luby_trials`,
+generalized from the original `4*(VARS^2-1)^2/epsilon^2` -- Chebyshev's
+`1/delta` factor, `delta=1/4` folding to that original `4`) grows as
+`O(VARS^4)`. At the real `epsilon=0.8, delta=0.2`:
+
+| VARS | M=CUBES² | K | K·M (work) | time |
+|---|---|---|---|---|
+| 4 | 16 | 1758 | 28128 | ~0.2 s |
+| 8 | 64 | 31008 | 1984512 | a few seconds |
+| 16 | 256 | 508008 | 130050048 | tens of minutes |
+| 32 | 1024 | 8176008 | 8372744192 | ~26 hours (extrapolated) |
+| 64 | 4096 | 131007891 | 536608092672 | ~110 days (extrapolated) |
+
+`VARS=32`/`64` simply aren't reachable with meaningful accuracy on this
+per-trial-gate architecture -- keeping them in the sweep would mean either
+running this benchmark for months, or quietly loosening epsilon again
+until it's no longer a real accuracy bound (an earlier version of this
+sweep did exactly that: `epsilon=1182` at `VARS=64` is not a `< 1`
+tolerance, it's a number that satisfies the formula for a `K` small enough
+to be fast, with no actual accuracy guarantee behind it). Better to be
+explicit that meaningful accuracy has a size limit than to hide it behind
+a technically-passing but vacuous epsilon.
+
+Two implementation problems this sweep surfaced along the way (both
+fixed, not workarounds specific to any one size -- they'd bite any
+circuit at this scale):
+
+1. **`emp::UInt_T`'s 64-bit reveal ceiling.** `UInt_T<Ctx,N>::clear_t` is a
+   plain `uint64_t` -- `.reveal()`/`.input()`/`.constant()` can't
+   round-trip more than 64 bits, a hard emp-toolkit limit, not something
+   tunable. The final `KarpLubyEstimate` width
+   (`(VARS+bits_for(M)) + 17 + bits_for(K)`) stays under 64 bits at every
+   size this sweep now uses, but not in general (it's what originally
+   broke at `VARS=32`/`64` in the earlier five-size sweep).
+   `pipeline/karp_luby_pipeline.h`'s `reveal_wide<W>()` handles the general
+   case regardless: it slices any wide value into `<=64`-bit chunks
+   (`UInt_T::slice<Lo,Hi>`, pure wiring, no extra gates), reveals each
+   separately, and reassembles them into an `unsigned __int128` in
+   plaintext -- which is why `run_karp_luby_pipeline` returns
+   `unsigned __int128`, not `uint64_t`.
+2. **Stack overflow at large `K`.** `pipeline/karp_luby_pipeline.h`'s
+   `reciprocals` local is an `array<DivideLookupResult<Ctx,PRODUCT>,K>` --
+   at `VARS=16`'s `K=508008`, that's well over a hundred megabytes, several
+   times over Linux's 8 MiB default stack. `bench_karp_luby.cpp`'s `main()`
+   raises the soft `RLIMIT_STACK` to 256 MiB up front (Linux grows the main
+   thread's stack on demand up to whatever the limit is *at fault time*, so
+   doing this after the process has already started still works) rather
+   than requiring `ulimit -s` as an external prerequisite.
 
 ```sh
 ./build/bench_karp_luby <party: 1=ALICE, 2=BOB> <path-to-dimacs-dnf-file>
 ```
 
 Same two-party launch convention as `sh2pc_demo` -- two terminals, or
-`./run.sh` adapted to point at `build/bench_karp_luby` instead. Example,
-against the bundled `alice.dnf`/`bob.dnf` (`VARS=4, CUBES=2`, so
-`EPSILON=0.2` gives `K = ceil(4*(4^2-1)^2/0.2^2) = 22500`):
+`./run.sh` adapted to point at `build/bench_karp_luby` instead. The same
+small bundled `alice.dnf`/`bob.dnf` (`4` vars, `2` cubes) is reused at
+*every* size in the sweep: `dimacs_dnf::parse<VARS,CUBES>` only requires
+the file's declared vars/cubes fit within the capacity, padding the rest
+(see "DIMACS-DNF cube parser" above), and circuit cost is the same
+regardless of how much of that capacity is "real" vs. padding, by design
+-- so this is a valid way to benchmark performance at a given size without
+a separately crafted DNF file per size. Expect the `VARS=16` point alone
+to take on the order of tens of minutes -- run this in the background
+rather than waiting on it interactively. Example output (`estimate`
+varies run to run, since it depends on fresh joint-random samples each
+time):
 
 ```sh
-# [alice] file=alice.dnf  VARS=4 CUBES=2  epsilon=0.2 K=22500  karp_luby_estimate=9.99889  elapsed=1009.02 ms
-# [bob]   file=bob.dnf  VARS=4 CUBES=2  epsilon=0.2 K=22500  karp_luby_estimate=9.99889  elapsed=1008.77 ms
-# Network statistics:
-#   sent:   192282741 B (183.38 MiB)
-#   recv:   4212749 B (4.02 MiB)
-#   ...
+# [alice] VARS=4 CUBES=4  epsilon=0.8 delta=0.2 K=1758  estimate=9.87486  elapsed=183.536 ms  sent=67.31 MiB recv=259.20 KiB rounds=7035
 ```
 
-(`karp_luby_estimate=9.99889` here, much tighter than the `K=3` demo's
-noisy `5`/`8.33`/`13.33` across separate runs -- exactly what `K=22500`
-independent trials buys: the estimator's variance actually shrinking, per
-`karp_luby_trials`'s whole point.)
+(Both parties print matching lines for every size -- confirmed by running
+it live: Alice and Bob agree exactly on `estimate`.)
 
-To benchmark a different `epsilon`, `VARS`, or `CUBES`, edit the
-`constexpr` constants at the top of `bench_karp_luby.cpp` and rebuild --
-they're compile-time, like every other circuit-shape constant in this
-codebase (see "Putting it together"), so there's no runtime flag for them.
+**Per-gadget breakdown.** Each size's summary line is followed by two
+sorted (biggest-first) tables answering "which gadget dominates" --
+network bytes and static memory, separately, since they're fundamentally
+different kinds of measurement (see `pipeline/karp_luby_pipeline.h`'s
+`PipelineBreakdown`/`PipelineMemoryReport` for why). Bytes are formatted
+with `format_bytes()` (binary units, KiB/MiB/GiB) matching
+`emp::NetIO::get_statistics_string()`'s own convention -- the same one
+already used by the "Network statistics:" printout that follows this
+program's output, so bytes aren't reported two different ways in the same
+console dump:
+
+```sh
+# [alice]     [net]  select_cube: sent=33.05 MiB recv=0.00 B total=33.05 MiB
+# [alice]     [net]  divide_lookup: sent=17.70 MiB recv=0.00 B total=17.70 MiB
+# [alice]     [net]  count_satisfied_cubes: sent=14.59 MiB recv=0.00 B total=14.59 MiB
+# [alice]     [net]  karp_luby_estimate: sent=1.49 MiB recv=0.00 B total=1.49 MiB
+# [alice]     [net]  random_assignment: sent=439.50 KiB recv=0.00 B total=439.50 KiB
+# [alice]     [net]  trial_random_input_feeding: sent=0.00 B recv=259.15 KiB total=259.15 KiB
+# [alice]     [net]  cube_weights: sent=23.50 KiB recv=0.00 B total=23.50 KiB
+# [alice]     [net]  conjoin_dnf: sent=19.00 KiB recv=0.00 B total=19.00 KiB
+# [alice]     [net]  cube_intervals: sent=4.00 KiB recv=0.00 B total=4.00 KiB
+# [alice]     [net]  dnf_weight: sent=3.75 KiB recv=0.00 B total=3.75 KiB
+# [alice]     [net]  reveal: sent=37.00 B recv=37.00 B total=74.00 B
+# [alice]     [net]  cube_input_feeding: sent=0.00 B recv=12.00 B total=12.00 B
+# [alice]     [mem]  reciprocals (K divide_lookup outputs): 494.44 KiB
+# [alice]     [mem]  conjunction (conjoin_dnf's output): 3.00 KiB
+# [alice]     [mem]  intervals (cube_intervals' output): 2.66 KiB
+# [alice]     [mem]  alice_cubes + bob_cubes: 1.50 KiB
+# [alice]     [mem]  weights (cube_weights' output): 1.50 KiB
+# [alice]     [mem]  one trial's live locals (selected/assignment/satisfied_count): 416.00 B
+```
+
+(`VARS=4` above, `K=1758` -- bandwidth is dominated by the per-trial
+gadgets (`select_cube`/`divide_lookup`/`count_satisfied_cubes`), each
+running `K` times, while memory is dominated by `reciprocals`, the one
+structure that's actually `K`-sized. Since this sweep now keeps `M` small
+throughout (`CUBES<=16`, so `M<=256`) while `K` grows large (real epsilon/
+delta demands it), `reciprocals` and the per-trial gadgets dominate at
+every size in this sweep -- unlike the earlier five-size sweep, where
+`VARS=64`'s tiny `K=48` let the `M`-sized structures
+(`conjunction`/`intervals`/`weights`) take over instead. Which gadget
+"wins" depends on which of `K` or `M` a given point favors, which is why
+both get reported per size instead of just once.)
+
+**Network breakdown** (`PipelineBreakdown`, `pipeline/karp_luby_pipeline.h`)
+wraps each gadget call in a `measure(io, breakdown, name, fn)` helper that
+snapshots `io->send_counter`/`recv_counter` before and after, the same
+before/after pattern the top-level per-size numbers already use (see
+above) -- just at finer granularity, one snapshot per gadget instead of
+one for the whole pipeline. Per-trial gadgets (`select_cube`,
+`random_assignment`, `count_satisfied_cubes`, `divide_lookup`) accumulate
+into the *same* named entry across all `K` trials, so e.g. `select_cube`'s
+number is that gadget's total over the whole run, not one trial's share.
+`run_karp_luby_pipeline`'s `io`/`breakdown` parameters both default to
+`nullptr`; `src/main.cpp` never passes either, so `measure()` degrades to
+a plain direct call there -- the demo pays nothing for this.
+
+**Memory breakdown** (`PipelineMemoryReport`, same file) is a *computed*
+report, not a runtime measurement: each structure's exact byte size
+(`sizeof(type) * count`) is known from its type alone. Runtime process
+memory (`getrusage().ru_maxrss`) was considered and rejected for this --
+it's a cumulative high-water mark that doesn't cleanly reset between
+gadgets, and most of what a gadget allocates is stack space freed the
+moment its function returns, so a live snapshot would mostly measure
+noise rather than each gadget's actual footprint.
+
+To change the sweep's sizes or the fixed epsilon/delta, edit the
+`EPSILON`/`DELTA` constants and the `run_one<VARS>(...)` calls in
+`main()` and rebuild -- `VARS`/`CUBES`/`K` are compile-time, like every
+other circuit-shape constant in this codebase (see "Putting it
+together"), so there's no runtime flag for them.
 
 ## Layout
 
 - `CMakeLists.txt` -- finds/links `emp-tool`, `emp-ot`, `emp-sh2pc`, OpenSSL, GMP.
 - `src/main.cpp` -- interactive two-party demo (small fixed `K`) of the pipeline below (see "Putting it together").
 - `src/pipeline/` -- the two-party circuit itself, shared by `main.cpp` and `src/bench/`:
-  - `karp_luby_pipeline.h` -- `run_karp_luby_pipeline<VARS,CUBES,K>`, `SH2PCSession`-only (not `Ctx`-generic like `gadgets/`).
+  - `karp_luby_pipeline.h` -- `run_karp_luby_pipeline<VARS,CUBES,K>` (returns `unsigned __int128`, via the file's own `reveal_wide<W>()`), `SH2PCSession`-only (not `Ctx`-generic like `gadgets/`); also `PipelineBreakdown`/`measure()` (optional per-gadget network accounting) and `PipelineMemoryReport`/`pipeline_memory_report<VARS,CUBES,K>()` (computed per-structure byte sizes) -- see "Benchmarks".
 - `src/bench/` -- benchmarks, following emp-toolkit's own `bench_<component>.cpp` convention (see "Benchmarks"):
-  - `bench_karp_luby.cpp` -- times the real circuit at the `K` a target epsilon requires.
+  - `bench_karp_luby.cpp` -- times the real circuit across a `VARS=CUBES` sweep from `4` to `16`, all at ApproxMC's default `epsilon=0.8, delta=0.2`, with a per-gadget network/memory breakdown at every size.
 - `src/utils/` -- data-prep helpers with no emp-tool dependency:
   - `dimacs_dnf.h` -- the DIMACS-DNF cube parser (header-only: `parse<VARS,CUBES>` is a template).
 - `src/gadgets/` -- Ctx-generic circuit gadgets, reusable across sessions:
