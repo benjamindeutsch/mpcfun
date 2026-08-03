@@ -14,7 +14,7 @@
 // sets of satisfying assignments of each cube): for a single trial,
 // E[1/count] = true_count / dnf_weight (this is exactly what makes the
 // algorithm work -- see gadgets/vazirani/count_satisfied_cubes.h and
-// gadgets/vazirani/select_cube.h), so E[dnf_weight * sum_t(1/count_t)] =
+// gadgets/general/select_cube.h), so E[dnf_weight * sum_t(1/count_t)] =
 // K * true_count. Averaging over K trials (dividing by K) and correcting
 // divide_lookup's fixed-point SCALE recovers true_count, up to
 // divide_lookup's own (tiny, fixed, M-independent) rounding error -- see

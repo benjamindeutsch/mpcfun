@@ -109,7 +109,7 @@ a party's real DNF actually has -- padding to a fixed public size is the
 usual way to do that in MPC. Being a template (so it can be instantiated at
 whatever `VARS`/`CUBES` a caller needs) is also why `parse` is defined
 directly in the header with no companion `.cpp`, for the same reason as
-`gadgets/dnf/dnf_distribute.h` (see its file for the fuller explanation).
+`gadgets/general/dnf_distribute.h` (see its file for the fuller explanation).
 
 `src/tests/dimacs_dnf_test.cpp` is its unit test (run via `build/run_tests`,
 see "Tests" below): writes small DIMACS-DNF snippets to temp files and
@@ -139,12 +139,12 @@ whichever gadget happened to need them first) for exactly that reason.
 than types: the `using` declarations (`BitVec_T`, `Bit_T`, `array`, etc.)
 every gadget needs, plus `zext_to<W>(v)` and `indicator<Count>(ctx, cond)`
 -- two small helpers factored out of patterns that used to be reimplemented
-in multiple gadgets (see `dnf/dnf_weight.h`, `dnf/cube_intervals.h`, and
-`vazirani/vazirani_estimate.h` for `zext_to`; `vazirani/select_cube.h`'s
+in multiple gadgets (see `general/dnf_weight.h`, `general/cube_intervals.h`,
+and `vazirani/vazirani_estimate.h` for `zext_to`; `general/select_cube.h`'s
 `select_cube_index` and `vazirani/count_satisfied_cubes.h` for
 `indicator`).
 
-`src/gadgets/dnf/dnf_distribute.h`'s `conjoin`/`conjoin_dnf` use `CircuitCube`
+`src/gadgets/general/dnf_distribute.h`'s `conjoin`/`conjoin_dnf` use `CircuitCube`
 for both inputs and outputs -- there's no separate "result" type, since a
 conjunction's output has the same shape as an input (and can itself be
 conjoined further).
@@ -169,7 +169,7 @@ a runtime-resizable container is actually needed.
 
 Both functions are templated over `Ctx` (any `emp::BooleanContext`), not
 tied to a specific session -- that's what makes this a separately testable
-unit. `src/tests/dnf/dnf_distribute_test.cpp` drives it through
+unit. `src/tests/general/dnf_distribute_test.cpp` drives it through
 `emp::ClearSession` (plaintext: no OT, no network, no garbling, single
 process) and checks it against hand-computed cases.
 
@@ -180,7 +180,7 @@ through these functions, and `sess.reveal(...)` the results.
 
 ### Cube weight
 
-`src/gadgets/dnf/cube_weight.h` computes a cube's *weight*: the number of full
+`src/gadgets/general/cube_weight.h` computes a cube's *weight*: the number of full
 assignments over `VARS` (`=N`) variables that satisfy it. A cube fixes
 `r = popcount(mask)` variables and leaves the other `VARS-r` free, so it's
 satisfied by exactly `2^(VARS-r)` of the `2^VARS` possible assignments --
@@ -198,11 +198,11 @@ weight `2^N`, same as a genuine empty cube, which is wrong: a padding cube
 isn't a real disjunct and must not contribute to a sum of weights across a
 DNF.
 
-Also tested via `emp::ClearSession` in `src/tests/dnf/cube_weight_test.cpp`.
+Also tested via `emp::ClearSession` in `src/tests/general/cube_weight_test.cpp`.
 
 ### DNF weight
 
-`src/gadgets/dnf/dnf_weight.h` sums an array of `CubeWeight<Ctx,N>` terms into a
+`src/gadgets/general/dnf_weight.h` sums an array of `CubeWeight<Ctx,N>` terms into a
 single total -- the whole DNF's satisfying-assignment count, provided its
 cubes are pairwise disjoint (true of a correctly-built cube cover; padding
 cubes contribute `0` via `cube_weight`, so they don't skew the sum either).
@@ -213,13 +213,13 @@ wide enough for the worst case, `M` terms each maxed out at `2^N`, since
 (depends only on `M`, not on computing `2^N` directly, so it stays correct
 even for large `N`).
 
-Also tested via `emp::ClearSession` in `src/tests/dnf/dnf_weight_test.cpp`,
+Also tested via `emp::ClearSession` in `src/tests/general/dnf_weight_test.cpp`,
 including summing the exact four cubes from `cube_weight_test.cpp`
 (`16 + 1 + 8 + 0 = 25`).
 
 ### Cube intervals
 
-`src/gadgets/dnf/cube_intervals.h` takes the same `std::array<CubeWeight<Ctx,N>,
+`src/gadgets/general/cube_intervals.h` takes the same `std::array<CubeWeight<Ctx,N>,
 M>` and computes the `M+1` interval boundaries `T_0..T_M`: `T_0 = 0`,
 `T_{i+1} = T_i + weights[i]`. `T_i` is the total weight of every cube
 before `i` -- the starting offset of cube `i`'s own block in a running
@@ -230,7 +230,7 @@ weight of all `M` cubes -- exactly `dnf_weight`'s result. Reuses
 `dnf_weight`'s own return type), since this is a superset of the same
 summation.
 
-Also tested via `emp::ClearSession` in `src/tests/dnf/cube_intervals_test.cpp`,
+Also tested via `emp::ClearSession` in `src/tests/general/cube_intervals_test.cpp`,
 including the exact cube_weight/dnf_weight test cases: weights `[16,1,8,0]`
 -> intervals `[0,16,17,25,25]`, and weights `[4,8,1,1]` -> intervals
 `[0,4,12,13,14]` (both `T_M` values matching the corresponding
@@ -238,7 +238,7 @@ including the exact cube_weight/dnf_weight test cases: weights `[16,1,8,0]`
 
 ### Select cube
 
-`src/gadgets/vazirani/select_cube.h` samples a joint random integer in
+`src/gadgets/general/select_cube.h` samples a joint random integer in
 `[1, total_weight]`, finds which cube's block it falls in, and looks up
 that cube's bits/mask -- composed from three separately testable pieces
 (`select_cube(alice_r, bob_r, total, intervals, cubes)`, as `main.cpp`
@@ -246,7 +246,7 @@ calls it, just calls them in sequence and returns the final
 `CubeData<Ctx,N>{bits, mask}`; the intermediate sample/index aren't part
 of its return value -- a caller that wants those too, e.g. for testing,
 calls `sample_in_range`/`select_cube_index` directly instead, as
-`src/tests/vazirani/select_cube_test.cpp` does):
+`src/tests/general/select_cube_test.cpp` does):
 
 1. **`sample_in_range(alice_r, bob_r, total)`** computes `(alice_r ^
    bob_r).as_uint() % total`, then `+1`. The `^` is a free-XOR coin flip --
@@ -282,7 +282,7 @@ calls `sample_in_range`/`select_cube_index` directly instead, as
    `0`, so it occupies a zero-width slice of the intervals that `z` can
    never land in).
 
-Also tested via `emp::ClearSession` in `src/tests/vazirani/select_cube_test.cpp`:
+Also tested via `emp::ClearSession` in `src/tests/general/select_cube_test.cpp`:
 for `sample_in_range`, a basic case, wrapping above `total`, the
 minimum/maximum possible sample, and both contributions nonzero; for
 `select_cube_index`, every boundary (including exact hits, like `z=12`
@@ -294,7 +294,7 @@ pair resolves to the right `cube.bits`/`cube.mask`.
 
 ### Random assignment
 
-`src/gadgets/vazirani/random_assignment.h` extends a `CubeData<Ctx,N>` (e.g. from
+`src/gadgets/general/random_assignment.h` extends a `CubeData<Ctx,N>` (e.g. from
 `select_cube`) into a full, uniformly random satisfying assignment over
 all `N` variables:
 
@@ -310,7 +310,7 @@ convention): `bits | (~0 & r) = r` -- filled in randomly. So if `r` is
 uniform, the result is a uniformly random assignment satisfying the cube.
 
 Also tested via `emp::ClearSession` in
-`src/tests/vazirani/random_assignment_test.cpp`: a fully-constrained cube (the
+`src/tests/general/random_assignment_test.cpp`: a fully-constrained cube (the
 assignment is just the cube's bits, `r` irrelevant), an empty cube (the
 assignment is exactly `r`), and a partially-constrained cube with two
 different `r` values (the fixed bit stays put; the free bits track `r`).
@@ -786,14 +786,14 @@ together"), so there's no runtime flag for them.
 - `src/gadgets/` -- Ctx-generic circuit gadgets, reusable across sessions:
   - `circuit_cube.h` -- `CircuitCube`, `CubeData`, `CubeWeight`, `DnfWeight`: the shared wire-level types.
   - `common.h` -- the `using` declarations every gadget below needs, plus two shared helpers (`zext_to`, `indicator`) that replace boilerplate several gadgets used to each reimplement.
-  - `dnf/` -- the DNF-conjunction-and-weighting stage:
+  - `general/` -- gadgets reusable by any estimator built on the same DNF-cube foundation, not specific to Vazirani's:
     - `dnf_distribute.h` -- the DNF-cube conjunction gadget.
     - `cube_weight.h` -- the per-cube satisfying-assignment-count gadget.
     - `dnf_weight.h` -- sums cube weights into the whole DNF's satisfying-assignment count.
     - `cube_intervals.h` -- the exclusive prefix sum of cube weights.
-  - `vazirani/` -- the Vazirani estimation stage:
     - `select_cube.h` -- samples a joint random value, then selects and looks up the cube it lands in.
     - `random_assignment.h` -- extends a selected cube into a full random satisfying assignment.
+  - `vazirani/` -- gadgets specific to the Vazirani estimator itself:
     - `count_satisfied_cubes.h` -- counts how many cubes in an array an assignment satisfies.
     - `divide_lookup.h` -- oblivious fixed-point `1/count` lookup table.
     - `vazirani_estimate.h` -- combines `K` trials' reciprocals and the total weight into the raw Vazirani estimate.
@@ -802,10 +802,10 @@ together"), so there's no runtime flag for them.
   - `bits_of.h` -- pure-stdlib `bits_of<N>(s)` helper (a `'0'`/`'1'` string -> `std::array<bool,N>`), shared by every test file including `dimacs_dnf_test.cpp`.
   - `test_helpers.h` -- emp-tool dependent helpers built on `bits_of.h`: `bits_of_uint<WIDTH>` and `make_cube<Session,Ctx,N>`, shared by every gadget test file.
   - `dimacs_dnf_test.cpp` -- tests for `utils/dimacs_dnf.h`.
-  - `dnf/` -- tests for `gadgets/dnf/`:
-    - `dnf_distribute_test.cpp`, `cube_weight_test.cpp`, `dnf_weight_test.cpp`, `cube_intervals_test.cpp` (all `emp::ClearSession`-based, no network).
+  - `general/` -- tests for `gadgets/general/`:
+    - `dnf_distribute_test.cpp`, `cube_weight_test.cpp`, `dnf_weight_test.cpp`, `cube_intervals_test.cpp`, `select_cube_test.cpp`, `random_assignment_test.cpp` (all `emp::ClearSession`-based, no network).
   - `vazirani/` -- tests for `gadgets/vazirani/`:
-    - `select_cube_test.cpp`, `random_assignment_test.cpp`, `count_satisfied_cubes_test.cpp`, `divide_lookup_test.cpp`, `vazirani_estimate_test.cpp` (all `emp::ClearSession`-based, no network).
+    - `count_satisfied_cubes_test.cpp`, `divide_lookup_test.cpp`, `vazirani_estimate_test.cpp` (all `emp::ClearSession`-based, no network).
 - `sample.dnf` -- a standalone example DIMACS-DNF file (used by `dimacs_dnf_test.cpp`'s docs, not read by any binary).
 - `alice.dnf` / `bob.dnf` -- the two parties' example private inputs to `main.cpp` and `bench_vazirani`.
 - `run.sh` -- launches both parties of `sh2pc_demo` locally for a quick check.

@@ -11,7 +11,7 @@
 // are therefore std::array<bool,VARS>, not a runtime-sized vector<bool> --
 // which is also why parse() is a template defined right here rather than
 // split into a .cpp: its body must be visible at every VARS/CUBES
-// instantiation, same reasoning as gadgets/dnf_distribute.h.
+// instantiation, same reasoning as gadgets/general/dnf_distribute.h.
 //
 // Deliberately has no emp-tool dependency: this is data preparation, not a
 // circuit. Callers wire Cube::bits / Cube::mask into whatever wire type

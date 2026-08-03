@@ -3,7 +3,7 @@
 // composed from three separately testable pieces:
 //   1. sample_in_range(alice_r, bob_r, total) -- the joint random sample.
 //   2. select_cube_index(z, intervals) -- which cube (1-indexed) it lands
-//      in, via the gadgets/dnf/cube_intervals.h boundaries.
+//      in, via the gadgets/general/cube_intervals.h boundaries.
 //   3. cube_at_index(index, cubes) -- an oblivious lookup of that cube's
 //      bits/mask out of the full array.
 //
@@ -14,7 +14,7 @@
 //
 // Ctx-generic (any BooleanContext), not tied to a specific session: the
 // same code type-checks under ClearSession (plaintext, for fast gadget
-// unit tests -- see tests/vazirani/select_cube_test.cpp) and SH2PCSession
+// unit tests -- see tests/general/select_cube_test.cpp) and SH2PCSession
 // (the real 2PC protocol) unchanged.
 
 #pragma once

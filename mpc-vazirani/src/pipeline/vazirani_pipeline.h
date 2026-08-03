@@ -33,12 +33,12 @@
 #include "emp-sh2pc/emp-sh2pc.h"
 #include "utils/dimacs_dnf.h"
 #include "gadgets/circuit_cube.h"
-#include "gadgets/dnf/dnf_distribute.h"
-#include "gadgets/dnf/cube_weight.h"
-#include "gadgets/dnf/dnf_weight.h"
-#include "gadgets/dnf/cube_intervals.h"
-#include "gadgets/vazirani/select_cube.h"
-#include "gadgets/vazirani/random_assignment.h"
+#include "gadgets/general/dnf_distribute.h"
+#include "gadgets/general/cube_weight.h"
+#include "gadgets/general/dnf_weight.h"
+#include "gadgets/general/cube_intervals.h"
+#include "gadgets/general/select_cube.h"
+#include "gadgets/general/random_assignment.h"
 #include "gadgets/vazirani/count_satisfied_cubes.h"
 #include "gadgets/vazirani/divide_lookup.h"
 #include "gadgets/vazirani/vazirani_estimate.h"
@@ -227,7 +227,7 @@ unsigned __int128 run_vazirani_pipeline(SH2PCSession& sess, const dimacs_dnf::Dn
         RandBits bob_r   = sess.input<RandBits>(BOB,   my_random_bits);
         if (breakdown) breakdown->add("trial_random_input_feeding", io->send_counter - trial_input_sent0, io->recv_counter - trial_input_recv0);
 
-        // select_cube's three pieces (gadgets/vazirani/select_cube.h),
+        // select_cube's three pieces (gadgets/general/select_cube.h),
         // called directly instead of through the composed select_cube()
         // so each gets its own breakdown entry rather than being lumped
         // into one "select_cube" bucket.
@@ -242,7 +242,7 @@ unsigned __int128 run_vazirani_pipeline(SH2PCSession& sess, const dimacs_dnf::Dn
         });
 
         // Extend the selected cube into a full random satisfying
-        // assignment (gadgets/vazirani/random_assignment.h): a second,
+        // assignment (gadgets/general/random_assignment.h): a second,
         // independent joint random bitstring (same free-XOR construction,
         // drawn/fed the same way) fills in whatever the cube leaves
         // unconstrained.

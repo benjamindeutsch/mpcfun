@@ -1,4 +1,4 @@
-// Unit test for gadgets/dnf/dnf_distribute.h, run entirely in the clear via
+// Unit test for gadgets/general/dnf_distribute.h, run entirely in the clear via
 // emp::ClearSession: no OT, no network, no garbling, single process. This
 // checks the gate-level logic of conjoin() in isolation, before it's ever
 // wired into the real SH2PCSession-based 2PC circuit -- since the gadget is
@@ -7,7 +7,7 @@
 // run_dnf_distribute_tests() is called from tests/run_tests.cpp's main(),
 // the single entry point for every *_test.cpp under tests/ -- see that file.
 
-#include "gadgets/dnf/dnf_distribute.h"
+#include "gadgets/general/dnf_distribute.h"
 #include "tests/test_helpers.h"
 #include "emp-tool/ir/session/clear_session.h"
 

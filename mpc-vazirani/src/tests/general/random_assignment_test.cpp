@@ -1,4 +1,4 @@
-// Unit tests for gadgets/vazirani/random_assignment.h, run entirely in the
+// Unit tests for gadgets/general/random_assignment.h, run entirely in the
 // clear via emp::ClearSession: no OT, no network, no garbling, single
 // process -- same approach as select_cube_test.cpp.
 //
@@ -6,7 +6,7 @@
 // main(), the single entry point for every *_test.cpp under tests/ -- see
 // that file.
 
-#include "gadgets/vazirani/random_assignment.h"
+#include "gadgets/general/random_assignment.h"
 #include "tests/bits_of.h"
 #include "emp-tool/ir/session/clear_session.h"
 

@@ -1,11 +1,11 @@
-// Unit tests for gadgets/dnf/cube_weight.h, run entirely in the clear via
+// Unit tests for gadgets/general/cube_weight.h, run entirely in the clear via
 // emp::ClearSession: no OT, no network, no garbling, single process --
 // same approach as dnf_distribute_test.cpp.
 //
 // run_cube_weight_tests() is called from tests/run_tests.cpp's main(), the
 // single entry point for every *_test.cpp under tests/ -- see that file.
 
-#include "gadgets/dnf/cube_weight.h"
+#include "gadgets/general/cube_weight.h"
 #include "tests/test_helpers.h"
 #include "emp-tool/ir/session/clear_session.h"
 

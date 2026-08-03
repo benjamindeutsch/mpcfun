@@ -1,14 +1,14 @@
 // cube_intervals: given an M-element array of cube weights (see
-// gadgets/dnf/cube_weight.h), computes the M+1 interval boundaries T_0..T_M:
+// gadgets/general/cube_weight.h), computes the M+1 interval boundaries T_0..T_M:
 // T_0 = 0, T_{i+1} = T_i + weights[i]. T_i is therefore the total weight of
 // every cube before i -- the starting offset of cube i's own block in a
 // running enumeration of satisfying assignments; T_M (the last boundary)
-// is the total weight of all M cubes, matching gadgets/dnf/dnf_weight.h's
+// is the total weight of all M cubes, matching gadgets/general/dnf_weight.h's
 // result exactly.
 //
 // Ctx-generic (any BooleanContext), not tied to a specific session: the
 // same code type-checks under ClearSession (plaintext, for fast gadget
-// unit tests -- see tests/dnf/cube_intervals_test.cpp) and SH2PCSession (the
+// unit tests -- see tests/general/cube_intervals_test.cpp) and SH2PCSession (the
 // real 2PC protocol) unchanged.
 
 #pragma once

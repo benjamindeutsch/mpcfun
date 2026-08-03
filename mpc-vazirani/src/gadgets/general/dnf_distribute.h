@@ -4,7 +4,7 @@
 // Templated over Ctx (any BooleanContext) and N (variable count), not
 // tied to a specific session. That's what makes this a separate testable
 // unit: the exact same code type-checks against ClearSession
-// (plaintext, no OT/network -- see tests/dnf/dnf_distribute_test.cpp) and
+// (plaintext, no OT/network -- see tests/general/dnf_distribute_test.cpp) and
 // against SH2PCSession (the real 2PC protocol), with zero changes.
 // Write and debug the gate logic under ClearSession, then reuse it as-is
 // once it's wired into the bigger circuit.

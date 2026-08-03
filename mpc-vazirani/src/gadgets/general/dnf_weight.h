@@ -1,4 +1,4 @@
-// dnf_weight: sums an array of per-cube weights (see gadgets/dnf/cube_weight.h,
+// dnf_weight: sums an array of per-cube weights (see gadgets/general/cube_weight.h,
 // gadgets/circuit_cube.h for CubeWeight) into a single total -- the DNF's
 // overall satisfying-assignment count, when its cubes are pairwise disjoint
 // (which is what a correctly-built cube cover gives you: padding cubes
@@ -6,7 +6,7 @@
 //
 // Ctx-generic (any BooleanContext), not tied to a specific session: the
 // same code type-checks under ClearSession (plaintext, for fast gadget
-// unit tests -- see tests/dnf/dnf_weight_test.cpp) and SH2PCSession (the real
+// unit tests -- see tests/general/dnf_weight_test.cpp) and SH2PCSession (the real
 // 2PC protocol) unchanged.
 
 #pragma once

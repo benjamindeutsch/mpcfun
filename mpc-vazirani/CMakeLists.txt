@@ -76,18 +76,18 @@ target_include_directories(bench_vazirani PRIVATE ${GMP_INCLUDE_DIR} ${MPC_VAZIR
 # exposes a run_*_tests() called from run_tests.cpp's main(), so a new test
 # file only needs adding to this source list + a declaration+call in
 # run_tests.cpp, not a whole new executable target. dnf_distribute_test.cpp
-# needs emp-tool (it drives gadgets/dnf/dnf_distribute.h through
+# needs emp-tool (it drives gadgets/general/dnf_distribute.h through
 # emp::ClearSession); dimacs_dnf_test.cpp doesn't, but sharing one binary
 # means it now links emp-tool too -- the trade-off for a single executable.
 add_executable(run_tests
     src/tests/run_tests.cpp
     src/tests/dimacs_dnf_test.cpp
-    src/tests/dnf/dnf_distribute_test.cpp
-    src/tests/dnf/cube_weight_test.cpp
-    src/tests/dnf/dnf_weight_test.cpp
-    src/tests/dnf/cube_intervals_test.cpp
-    src/tests/vazirani/select_cube_test.cpp
-    src/tests/vazirani/random_assignment_test.cpp
+    src/tests/general/dnf_distribute_test.cpp
+    src/tests/general/cube_weight_test.cpp
+    src/tests/general/dnf_weight_test.cpp
+    src/tests/general/cube_intervals_test.cpp
+    src/tests/general/select_cube_test.cpp
+    src/tests/general/random_assignment_test.cpp
     src/tests/vazirani/count_satisfied_cubes_test.cpp
     src/tests/vazirani/divide_lookup_test.cpp
     src/tests/vazirani/vazirani_estimate_test.cpp

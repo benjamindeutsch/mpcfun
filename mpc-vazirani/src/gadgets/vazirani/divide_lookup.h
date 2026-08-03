@@ -21,7 +21,7 @@
 // The table itself is PUBLIC constants (free -- no OT/garbling for
 // those); only the O(M) equality comparisons that obliviously select
 // table[index] cost real gates, the same linear-scan pattern
-// gadgets/vazirani/select_cube.h's cube_at_index uses to look up a cube
+// gadgets/general/select_cube.h's cube_at_index uses to look up a cube
 // by secret index. That's much cheaper than a real division circuit
 // (kernel::div_full's restoring-division algorithm) for the M this
 // pipeline uses.

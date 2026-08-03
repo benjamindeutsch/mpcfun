@@ -7,7 +7,7 @@
 // DNF's satisfying assignments from its (disjoint) cubes.
 //
 // Ctx-generic like gadgets/circuit_cube.h, for the same reason: testable
-// under ClearSession (see tests/dnf/cube_weight_test.cpp) with zero
+// under ClearSession (see tests/general/cube_weight_test.cpp) with zero
 // changes needed to later run under the real SH2PCSession protocol.
 
 #pragma once
