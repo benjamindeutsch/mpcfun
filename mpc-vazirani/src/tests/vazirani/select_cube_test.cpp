@@ -1,4 +1,4 @@
-// Unit tests for gadgets/karp_luby/select_cube.h, run entirely in the clear
+// Unit tests for gadgets/vazirani/select_cube.h, run entirely in the clear
 // via emp::ClearSession: no OT, no network, no garbling, single process --
 // same approach as dnf_weight_test.cpp.
 //
@@ -10,7 +10,7 @@
 // run_select_cube_tests() is called from tests/run_tests.cpp's main(), the
 // single entry point for every *_test.cpp under tests/ -- see that file.
 
-#include "gadgets/karp_luby/select_cube.h"
+#include "gadgets/vazirani/select_cube.h"
 #include "tests/test_helpers.h"
 #include "emp-tool/ir/session/clear_session.h"
 

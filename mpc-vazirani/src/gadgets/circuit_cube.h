@@ -21,9 +21,9 @@ struct CircuitCube {
     Bit_T<Ctx> pad;
 };
 
-// Just bits/mask, no pad: the payload gadgets/karp_luby/select_cube.h's
+// Just bits/mask, no pad: the payload gadgets/vazirani/select_cube.h's
 // select_cube hands back (a validly-selected cube is never padding) and
-// gadgets/karp_luby/random_assignment.h consumes.
+// gadgets/vazirani/random_assignment.h consumes.
 template <BooleanContext Ctx, int N>
 struct CubeData {
     BitVec_T<Ctx, N> bits;

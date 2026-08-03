@@ -1,8 +1,8 @@
 {
     "configurations": [
         {
-            "name": "mpc-sandbox",
-            "compileCommands": "${workspaceFolder}/mpc-sandbox/build/compile_commands.json",
+            "name": "mpc-vazirani",
+            "compileCommands": "${workspaceFolder}/mpc-vazirani/build/compile_commands.json",
             "cStandard": "c17",
             "cppStandard": "c++20"
         }

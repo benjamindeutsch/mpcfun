@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(mpc-sandbox CXX)
+project(mpc-vazirani CXX)
 
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
@@ -41,7 +41,7 @@ endif()
 
 # src/ itself is on the include path so headers are referenced by their
 # folder (gadgets/..., utils/...) from anywhere under src/, e.g. in tests/.
-set(MPC_SANDBOX_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src)
+set(MPC_VAZIRANI_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 add_executable(sh2pc_demo src/main.cpp)
 target_link_libraries(sh2pc_demo PRIVATE
@@ -52,17 +52,17 @@ target_link_libraries(sh2pc_demo PRIVATE
     ${GMP_LIBRARY}
     ${GMPXX_LIBRARY}
 )
-target_include_directories(sh2pc_demo PRIVATE ${GMP_INCLUDE_DIR} ${MPC_SANDBOX_SRC_DIR})
+target_include_directories(sh2pc_demo PRIVATE ${GMP_INCLUDE_DIR} ${MPC_VAZIRANI_SRC_DIR})
 
 # Benchmark binary, following emp-toolkit's own bench_<component>.cpp
 # convention (see emp-tool/docs/benchmark_conventions.md) rather than a
-# bespoke harness: src/bench/bench_karp_luby.cpp times the real 2PC
+# bespoke harness: src/bench/bench_vazirani.cpp times the real 2PC
 # pipeline via emp-tool's clock_start()/time_from(), at the K a target
-# epsilon actually requires (see gadgets/karp_luby/karp_luby_estimate.h's
-# karp_luby_trials()) -- unlike sh2pc_demo's small fixed K, which is only
+# epsilon actually requires (see gadgets/vazirani/vazirani_estimate.h's
+# vazirani_trials()) -- unlike sh2pc_demo's small fixed K, which is only
 # for a fast interactive smoke test.
-add_executable(bench_karp_luby src/bench/bench_karp_luby.cpp)
-target_link_libraries(bench_karp_luby PRIVATE
+add_executable(bench_vazirani src/bench/bench_vazirani.cpp)
+target_link_libraries(bench_vazirani PRIVATE
     emp-sh2pc::emp-sh2pc
     emp-ot::emp-ot
     emp-tool::emp-tool
@@ -70,7 +70,7 @@ target_link_libraries(bench_karp_luby PRIVATE
     ${GMP_LIBRARY}
     ${GMPXX_LIBRARY}
 )
-target_include_directories(bench_karp_luby PRIVATE ${GMP_INCLUDE_DIR} ${MPC_SANDBOX_SRC_DIR})
+target_include_directories(bench_vazirani PRIVATE ${GMP_INCLUDE_DIR} ${MPC_VAZIRANI_SRC_DIR})
 
 # One test binary for every tests/*_test.cpp (see run_tests.cpp): each
 # exposes a run_*_tests() called from run_tests.cpp's main(), so a new test
@@ -86,11 +86,11 @@ add_executable(run_tests
     src/tests/dnf/cube_weight_test.cpp
     src/tests/dnf/dnf_weight_test.cpp
     src/tests/dnf/cube_intervals_test.cpp
-    src/tests/karp_luby/select_cube_test.cpp
-    src/tests/karp_luby/random_assignment_test.cpp
-    src/tests/karp_luby/count_satisfied_cubes_test.cpp
-    src/tests/karp_luby/divide_lookup_test.cpp
-    src/tests/karp_luby/karp_luby_estimate_test.cpp
+    src/tests/vazirani/select_cube_test.cpp
+    src/tests/vazirani/random_assignment_test.cpp
+    src/tests/vazirani/count_satisfied_cubes_test.cpp
+    src/tests/vazirani/divide_lookup_test.cpp
+    src/tests/vazirani/vazirani_estimate_test.cpp
 )
 target_link_libraries(run_tests PRIVATE emp-tool::emp-tool)
-target_include_directories(run_tests PRIVATE ${MPC_SANDBOX_SRC_DIR})
+target_include_directories(run_tests PRIVATE ${MPC_VAZIRANI_SRC_DIR})

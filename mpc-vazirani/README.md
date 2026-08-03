@@ -1,4 +1,4 @@
-# mpc-sandbox
+# mpc-vazirani
 
 A two-party garbled-circuit pipeline for DNF intersection counting, built on
 [emp-toolkit](https://github.com/emp-toolkit) (`emp-tool` + `emp-ot` +
@@ -6,7 +6,7 @@ A two-party garbled-circuit pipeline for DNF intersection counting, built on
 (as a DIMACS-style file); the circuit computes the cubes of the two DNFs'
 conjunction, each cube's satisfying-assignment count, both the total count
 and the per-cube exclusive prefix sum over those counts, and then runs `K`
-independent trials of a **Karp-Luby estimator** (joint-random cube
+independent trials of a **Vazirani estimator** (joint-random cube
 selection, a random satisfying assignment of it, a count of how many
 conjunction cubes that assignment satisfies, and an oblivious 1/count
 lookup) to approximate the *true* satisfying-assignment count of the
@@ -66,16 +66,16 @@ both args optional -- default to the bundled `alice.dnf`/`bob.dnf`):
 
 ```sh
 ./run.sh
-# [bob]   file=./bob.dnf  karp_luby_estimate_raw=2621440  (K=3, scale=65536)  karp_luby_estimate=13.3333
-# [alice] file=./alice.dnf  karp_luby_estimate_raw=2621440  (K=3, scale=65536)  karp_luby_estimate=13.3333
+# [bob]   file=./bob.dnf  vazirani_estimate_raw=2621440  (K=3, scale=65536)  vazirani_estimate=13.3333
+# [alice] file=./alice.dnf  vazirani_estimate_raw=2621440  (K=3, scale=65536)  vazirani_estimate=13.3333
 ```
 
-(`karp_luby_estimate_raw` is the only revealed value -- `total_weight * sum`
+(`vazirani_estimate_raw` is the only revealed value -- `total_weight * sum`
 of the `K` trials' `divide_lookup` reciprocals (see "Divide lookup" and
-"Karp-Luby estimate" below), all `K` trials' sampling, selection, and
+"Vazirani estimate" below), all `K` trials' sampling, selection, and
 counting having stayed entirely private. Dividing that raw value by `K *
 scale` in plaintext (free, since both are public compile-time constants)
-gives the actual Karp-Luby estimate of the conjunction's true
+gives the actual Vazirani estimate of the conjunction's true
 satisfying-assignment count -- `13.3` here, in the same ballpark as
 `total_weight=20`, since these particular conjunction cubes overlap only
 partially and `K=3` is far too few trials for a tight estimate (see
@@ -133,15 +133,15 @@ the same fields as `dimacs_dnf::Cube` but as wires
 `DnfWeight<Ctx,N,M>` aliases. All four are shared foundational types, used
 by more than one gadget (`cube_weight.h`/`dnf_weight.h`/
 `cube_intervals.h`/`select_cube.h`/`random_assignment.h`/
-`karp_luby_estimate.h`) -- they live in their own file (rather than inside
+`vazirani_estimate.h`) -- they live in their own file (rather than inside
 whichever gadget happened to need them first) for exactly that reason.
 `src/gadgets/common.h` is the analogous shared file for boilerplate rather
 than types: the `using` declarations (`BitVec_T`, `Bit_T`, `array`, etc.)
 every gadget needs, plus `zext_to<W>(v)` and `indicator<Count>(ctx, cond)`
 -- two small helpers factored out of patterns that used to be reimplemented
 in multiple gadgets (see `dnf/dnf_weight.h`, `dnf/cube_intervals.h`, and
-`karp_luby/karp_luby_estimate.h` for `zext_to`; `karp_luby/select_cube.h`'s
-`select_cube_index` and `karp_luby/count_satisfied_cubes.h` for
+`vazirani/vazirani_estimate.h` for `zext_to`; `vazirani/select_cube.h`'s
+`select_cube_index` and `vazirani/count_satisfied_cubes.h` for
 `indicator`).
 
 `src/gadgets/dnf/dnf_distribute.h`'s `conjoin`/`conjoin_dnf` use `CircuitCube`
@@ -238,7 +238,7 @@ including the exact cube_weight/dnf_weight test cases: weights `[16,1,8,0]`
 
 ### Select cube
 
-`src/gadgets/karp_luby/select_cube.h` samples a joint random integer in
+`src/gadgets/vazirani/select_cube.h` samples a joint random integer in
 `[1, total_weight]`, finds which cube's block it falls in, and looks up
 that cube's bits/mask -- composed from three separately testable pieces
 (`select_cube(alice_r, bob_r, total, intervals, cubes)`, as `main.cpp`
@@ -246,7 +246,7 @@ calls it, just calls them in sequence and returns the final
 `CubeData<Ctx,N>{bits, mask}`; the intermediate sample/index aren't part
 of its return value -- a caller that wants those too, e.g. for testing,
 calls `sample_in_range`/`select_cube_index` directly instead, as
-`src/tests/karp_luby/select_cube_test.cpp` does):
+`src/tests/vazirani/select_cube_test.cpp` does):
 
 1. **`sample_in_range(alice_r, bob_r, total)`** computes `(alice_r ^
    bob_r).as_uint() % total`, then `+1`. The `^` is a free-XOR coin flip --
@@ -282,7 +282,7 @@ calls `sample_in_range`/`select_cube_index` directly instead, as
    `0`, so it occupies a zero-width slice of the intervals that `z` can
    never land in).
 
-Also tested via `emp::ClearSession` in `src/tests/karp_luby/select_cube_test.cpp`:
+Also tested via `emp::ClearSession` in `src/tests/vazirani/select_cube_test.cpp`:
 for `sample_in_range`, a basic case, wrapping above `total`, the
 minimum/maximum possible sample, and both contributions nonzero; for
 `select_cube_index`, every boundary (including exact hits, like `z=12`
@@ -294,7 +294,7 @@ pair resolves to the right `cube.bits`/`cube.mask`.
 
 ### Random assignment
 
-`src/gadgets/karp_luby/random_assignment.h` extends a `CubeData<Ctx,N>` (e.g. from
+`src/gadgets/vazirani/random_assignment.h` extends a `CubeData<Ctx,N>` (e.g. from
 `select_cube`) into a full, uniformly random satisfying assignment over
 all `N` variables:
 
@@ -310,14 +310,14 @@ convention): `bits | (~0 & r) = r` -- filled in randomly. So if `r` is
 uniform, the result is a uniformly random assignment satisfying the cube.
 
 Also tested via `emp::ClearSession` in
-`src/tests/karp_luby/random_assignment_test.cpp`: a fully-constrained cube (the
+`src/tests/vazirani/random_assignment_test.cpp`: a fully-constrained cube (the
 assignment is just the cube's bits, `r` irrelevant), an empty cube (the
 assignment is exactly `r`), and a partially-constrained cube with two
 different `r` values (the fixed bit stays put; the free bits track `r`).
 
 ### Count satisfied cubes
 
-`src/gadgets/karp_luby/count_satisfied_cubes.h` counts how many cubes in an array a
+`src/gadgets/vazirani/count_satisfied_cubes.h` counts how many cubes in an array a
 given assignment satisfies: cube `c` is satisfied iff `(assignment &
 c.mask) == c.bits` -- assignment agrees with `c` on every variable `c`
 constrains (variables `c` leaves free never affect the check). A padding
@@ -329,7 +329,7 @@ built the same way as `select_cube_index`'s count: each `Bit_T` comparison
 turned into 0/1 via `.select()` before accumulating.
 
 Also tested via `emp::ClearSession` in
-`src/tests/karp_luby/count_satisfied_cubes_test.cpp`, against 3 ordinary cubes plus
+`src/tests/vazirani/count_satisfied_cubes_test.cpp`, against 3 ordinary cubes plus
 a padding cube: assignments satisfying `0`, `1`, `2`, and `3` of the
 ordinary cubes, checking in each case that the padding cube is never
 counted -- including when every bit of the assignment happens to match
@@ -337,7 +337,7 @@ the padding cube's own `bits` pattern.
 
 ### Divide lookup
 
-`src/gadgets/karp_luby/divide_lookup.h` computes `1/count` for a `count` in
+`src/gadgets/vazirani/divide_lookup.h` computes `1/count` for a `count` in
 `1..M`, via an oblivious lookup table instead of a division circuit:
 `count` is bounded by the small compile-time constant `M` (the number of
 conjunction cubes), so a linear-scan mux over `M` precomputed constants
@@ -363,7 +363,7 @@ wires once `M` reaches the low thousands (see "Benchmarks" below, where
 `M` does) -- unusable. A fixed power-of-two `SCALE` keeps every table
 entry's width constant regardless of `M`, at the cost of making
 reciprocals approximate instead of exact: relative rounding error is at
-most `2^-16` per entry, utterly negligible next to the Karp-Luby
+most `2^-16` per entry, utterly negligible next to the Vazirani
 estimator's own `O(1/sqrt(K))` sampling error at any `K` actually
 affordable to run. A caller divides the *revealed* result by `scale` in
 plaintext to recover the (approximate) `1/count`; `scale` is a public
@@ -372,16 +372,16 @@ on it). `DivideLookupResult<Ctx,M>` (`= UInt_T<Ctx, 17>`) is wide enough
 to hold the largest table entry, `scale` itself (`count=1`, the one case
 that needs no rounding) -- a fixed width, independent of `M`.
 
-Also tested via `emp::ClearSession` in `src/tests/karp_luby/divide_lookup_test.cpp`:
+Also tested via `emp::ClearSession` in `src/tests/vazirani/divide_lookup_test.cpp`:
 checks `divide_lookup(1..4) == 65536, 32768, 21845, 16384` (exact for
 `1,2,4`, which divide `65536` evenly; rounded for `3`).
 
-### Karp-Luby estimate
+### Vazirani estimate
 
-`src/gadgets/karp_luby/karp_luby_estimate.h` computes `dnf_weight * sum_t
+`src/gadgets/vazirani/vazirani_estimate.h` computes `dnf_weight * sum_t
 reciprocals[t]` over `K` independent trials -- the raw (unnormalized)
-numerator of the [Karp-Luby estimator](https://en.wikipedia.org/wiki/Karp%E2%80%93Luby_algorithm)
-(a.k.a. the "coverage algorithm") for the *true* number of satisfying
+numerator of the Vazirani estimator (a.k.a. the "coverage algorithm") for
+the *true* number of satisfying
 assignments of a union of possibly-overlapping sets -- here, the
 conjunction's cubes, which (unlike a correctly-built disjoint cube cover)
 aren't guaranteed pairwise disjoint, so `dnf_weight`'s plain sum
@@ -392,13 +392,13 @@ count_satisfied_cubes -> divide_lookup` (see their sections above): sample
 a cube weighted by its size, sample a uniform satisfying assignment of it,
 count how many conjunction cubes that assignment satisfies (`count`), and
 look up `1/count`. This makes `E[1/count] = true_count / dnf_weight` (the
-standard Karp-Luby argument), so `E[dnf_weight * sum_t(1/count_t)] = K *
-true_count`. `karp_luby_estimate<Ctx,N,M,K>(weight, reciprocals)` takes
+standard Vazirani argument), so `E[dnf_weight * sum_t(1/count_t)] = K *
+true_count`. `vazirani_estimate<Ctx,N,M,K>(weight, reciprocals)` takes
 the `DnfWeight<Ctx,N,M>` total and a `std::array<DivideLookupResult<Ctx,M>,
 K>` of the `K` trials' reciprocals, and returns the raw product as a
-`KarpLubyEstimate<Ctx,N,M,K>` -- wide enough for the worst case via the
+`VaziraniEstimate<Ctx,N,M,K>` -- wide enough for the worst case via the
 usual zext-to-common-width-then-multiply/sum pattern. The intermediate
-sum's width (`KarpLubySum<Ctx,M,K>`) is computed as `(kDivideLookupScaleBits
+sum's width (`VaziraniSum<Ctx,M,K>`) is computed as `(kDivideLookupScaleBits
 + 1) + bits_for(K)` -- an *addition*, not `bits_for(K * lookup_scale<M>())`
 -- since that product can exceed `INT_MAX` well before `K` itself does,
 and `emp::kernel::bits_for` takes a plain `int`; the addition gives the
@@ -411,43 +411,63 @@ constants, so a caller does that division for free in plaintext on the
 *revealed* result, same as `divide_lookup`'s own un-scaling.
 
 Also tested via `emp::ClearSession` in
-`src/tests/karp_luby/karp_luby_estimate_test.cpp`, `N=4,M=4,K=3`: e.g.
+`src/tests/vazirani/vazirani_estimate_test.cpp`, `N=4,M=4,K=3`: e.g.
 `weight=20, reciprocals=[65536,32768,16384] -> 20*114688 = 2293760`
 (matching `main.cpp`'s real `dnf_weight=20`, and 3 trials with `count =
 1, 2, 4`), and a degenerate `weight=0 -> estimate=0` regardless of the
 reciprocals.
 
-The same file also has `karp_luby_trials(vars, epsilon, delta)` -- a plain
-host-side `constexpr` calculation (no `Ctx`/wires involved, unlike
-everything else in this file), *not* a circuit gadget: the number of
-trials `K` needed for the resulting estimate to be within relative error
-`epsilon` of the true count with probability `>= 1-delta` (a Chebyshev/
-second-moment bound), `K = ceil((1/delta) * (vars^2 - 1)^2 / epsilon^2)`.
-`delta` is an explicit parameter (rather than a fixed `1/4` baked into a
-constant `4`) precisely so real targets -- e.g.
-[ApproxMC](https://github.com/meelgroup/approxmc)'s own defaults,
-`epsilon=0.8, delta=0.2` -- can be plugged in directly; see "Benchmarks"
-below for why that matters and what it costs. Callers pick `K` from this
-before touching any of the `K`-templated gadgets above --
-`src/bench/bench_karp_luby.cpp` does exactly that; `src/main.cpp` doesn't,
-since its `K=3` is deliberately just a fast interactive smoke test, not a
-real accuracy guarantee. Checked against three hand-computed cases in
-`karp_luby_estimate_test.cpp`: `karp_luby_trials(4, 0.5, 0.25) == 3600` and
-`karp_luby_trials(2, 1.0, 0.25) == 36` (both at `delta=0.25`, i.e.
-probability `>= 3/4`, this function's original form), and
-`karp_luby_trials(4, 0.8, 0.2) == 1758` (ApproxMC's defaults).
+The same file also has `vazirani_trials` -- plain host-side `constexpr`
+calculations (no `Ctx`/wires involved, unlike everything else in this
+file), *not* circuit gadgets: the number of trials `K` needed for the
+resulting estimate to be within relative error `epsilon` of the true
+count with probability `>= 1-delta`. Two overloads:
+
+- `vazirani_trials(double variance_ratio, double epsilon, double delta)`
+  is the real bound:
+  `K = ceil(min(1/delta, 3*ln(2/delta)) * variance_ratio / epsilon^2)`.
+  `variance_ratio` is `Var(X_t)/E[X_t]^2` for a single trial's `X_t =
+  1/count` -- with `X_t <= 1`, `Var(X_t) <= E[X_t] - E[X_t]^2`, so
+  `Var/mu^2 <= 1/mu - 1 = S/|U| - 1` (`S` = `dnf_weight`, `|U|` = the true
+  count), which is at most `S/W_max - 1 <= N - 1` (`N` = number of
+  conjunction cubes, `W_max` = the largest one's weight). **This bound is
+  linear in `N`, not quadratic -- that linearity is the actual Vazirani
+  theorem.** `min(1/delta, 3*ln(2/delta))` takes the better of two
+  concentration bounds: Chebyshev (`1/delta`, from the argument above) or
+  a multiplicative Chernoff bound (`3*ln(2/delta)`, valid since the `X_t`
+  are i.i.d. in `[0,1]`) -- Chernoff wins for `delta` below roughly `0.15`.
+  (`const_log`, alongside it in the same file, is a `constexpr` natural
+  log via `atanh`-series expansion, since `<cmath>`'s `std::log` isn't
+  reliably usable in a constant expression.)
+- `vazirani_trials(int cubes, double epsilon, double delta)` is the
+  convenience form every caller actually uses: a conservative
+  `variance_ratio = cubes^2 - 1`, taking `cubes` as the *per-party* cube
+  count (so `cubes^2` is `N`, the conjoined DNF's cube count -- see
+  "Putting it together" above) and using the worst case `W_max=1` (every
+  cube fully constrained) rather than requiring the real weights at
+  compile time.
+
+An earlier version of this function was quadratic in `(vars^2-1)^2`
+(mixing up `vars` -- the *variable* count -- with the cube count, and
+missing the linear-not-quadratic bound above) -- see "Benchmarks" below
+for how much that mistake cost. Callers pick `K` from this before
+touching any of the `K`-templated gadgets above --
+`src/bench/bench_vazirani.cpp` does exactly that, calling
+`vazirani_trials(CUBES, epsilon, delta)`; `src/main.cpp` doesn't, since
+its `K=3` is deliberately just a fast interactive smoke test, not a real
+accuracy guarantee.
 
 ## Putting it together
 
-`src/pipeline/karp_luby_pipeline.h`'s `run_karp_luby_pipeline<VARS,CUBES,K>
+`src/pipeline/vazirani_pipeline.h`'s `run_vazirani_pipeline<VARS,CUBES,K>
 (sess, my_dnf)` is the two-party circuit itself -- each party's already
 locally-`dimacs_dnf::parse<VARS,CUBES>`d DNF in (parsing happens before
 either party touches the network -- it's data prep, not a circuit; see
-"DIMACS-DNF cube parser" above), a single revealed raw Karp-Luby numerator
+"DIMACS-DNF cube parser" above), a single revealed raw Vazirani numerator
 out. It's a function rather than living directly in `main()` because two
 different binaries need it with two different `K`s: `src/main.cpp` (the
 interactive demo, `K=3`, just a fast smoke test) and
-`src/bench/bench_karp_luby.cpp` (the benchmark, `K` from a real target
+`src/bench/bench_vazirani.cpp` (the benchmark, `K` from a real target
 epsilon -- see "Benchmarks" below) would otherwise each carry their own
 copy. Not `Ctx`-generic like the `gadgets/` headers it calls -- it's
 `SH2PCSession`-only, since it does real network I/O via `sess.input`/
@@ -464,7 +484,7 @@ Given each party's already-parsed cubes as private input, the circuit:
 5. computes the `CUBES*CUBES+1` interval boundaries over the weights
    (`cube_intervals`), then
 6. runs `K` independent trials (a template parameter -- see above for how
-   the two callers each pick it) of the Karp-Luby sub-pipeline, each with
+   the two callers each pick it) of the Vazirani sub-pipeline, each with
    its own fresh joint-random draws, all of it staying private (nothing
    about any individual trial is revealed):
    1. draws each party's local random contribution and, from it, samples a
@@ -482,8 +502,8 @@ Given each party's already-parsed cubes as private input, the circuit:
    4. looks up that count's fixed-point reciprocal (`divide_lookup` -- see
       its section above), and
 7. sums the `K` reciprocals and multiplies by the total from step 4
-   (`karp_luby_estimate` -- see its section above), the raw numerator of
-   the Karp-Luby estimate of the conjunction's *true* satisfying-assignment
+   (`vazirani_estimate` -- see its section above), the raw numerator of
+   the Vazirani estimate of the conjunction's *true* satisfying-assignment
    count.
 
 `VARS`/`CUBES` (currently `4`/`2`, so `PRODUCT = CUBES*CUBES = 4`) are
@@ -497,7 +517,7 @@ weight, the interval boundaries, and every trial's sample/selected
 cube/assignment/satisfied count all stay private, known to neither party.
 That's not quite the final protocol either -- a real deployment would
 likely want to keep even the estimate private (e.g. only reveal a
-threshold check against it) -- but it's the actual Karp-Luby computation,
+threshold check against it) -- but it's the actual Vazirani computation,
 not a placeholder.
 
 `alice.dnf` / `bob.dnf` at the project root are the bundled example
@@ -506,7 +526,7 @@ Bob's is `x1 ∨ x3`. Their conjunction's 4 cubes all turn out non-contradictory
 (weights `8, 4, 4, 4` in cross-product order), giving a (private)
 `total_weight=20` -- which exceeds `2^VARS=16`, the maximum possible number
 of distinct assignments, so these 4 conjunction cubes necessarily overlap.
-The revealed `karp_luby_estimate` (e.g. `5` in the "Run" example above,
+The revealed `vazirani_estimate` (e.g. `5` in the "Run" example above,
 varying run to run since it depends on `K` fresh joint-random samples each
 time) comes out below `total_weight=20`, correctly reflecting that overlap.
 
@@ -549,7 +569,7 @@ previous one passed in full.
 # ...
 # === divide_lookup_test ===
 # ...
-# === karp_luby_estimate_test ===
+# === vazirani_estimate_test ===
 # ...
 # === all test suites passed ===
 ```
@@ -565,16 +585,14 @@ a whole now needs emp-tool too.
 
 ## Benchmarks
 
-`src/bench/bench_karp_luby.cpp` times the real two-party circuit
-(`pipeline/karp_luby_pipeline.h`, the same one `main.cpp` runs) across a
-**sweep** of three sizes, `VARS=CUBES` doubling from `4` to `16`, all at a
+`src/bench/bench_vazirani.cpp` times the real two-party circuit
+(`pipeline/vazirani_pipeline.h`, the same one `main.cpp` runs) across a
+**sweep** of four sizes, `VARS=CUBES` doubling from `4` to `32`, all at a
 single **fixed, meaningful** epsilon/delta --
 [ApproxMC](https://github.com/meelgroup/approxmc)'s own defaults,
 `epsilon=0.8` (tolerance) and `delta=0.2` (failure probability, i.e.
 success probability `>= 1-delta = 0.8`) -- rather than `main.cpp`'s small
-fixed `K=3` smoke-test value, or an earlier version of this sweep that
-loosened epsilon per size just to stay fast (see below for why that
-changed).
+fixed `K=3` smoke-test value.
 
 It follows emp-toolkit's own benchmark conventions
 (`emp-tool/docs/benchmark_conventions.md`) instead of a bespoke harness:
@@ -588,29 +606,28 @@ way `emp-ot/bench/bench.h`'s `time_ot()` does -- an `io->send_counter` /
 call, since one `NetIO` connection is reused across the whole sweep (its
 own end-of-process printout would only give a session-wide total).
 
-**Why the sweep stops at `VARS=16`, not `64`**:
-`K = ceil((1/delta)*(VARS^2-1)^2/epsilon^2)` (`gadgets::karp_luby_trials`,
-generalized from the original `4*(VARS^2-1)^2/epsilon^2` -- Chebyshev's
-`1/delta` factor, `delta=1/4` folding to that original `4`) grows as
-`O(VARS^4)`. At the real `epsilon=0.8, delta=0.2`:
+**Why this sweep now reaches `VARS=32` (it didn't used to)**:
+`vazirani_trials` (`gadgets/vazirani/vazirani_estimate.h`) originally
+computed `K` as quadratic in `(vars^2-1)` -- a bug (mixing up the
+*variable* count with the conjoined DNF's *cube* count, and missing that
+the real Vazirani bound is linear in the cube count, not quadratic). That
+made `K` grow as `O(VARS^4)`, requiring billions of trials -- hours to
+months -- for anything past `VARS=16` at a real epsilon/delta, which is
+why an earlier version of this sweep either stopped at `VARS=16` or
+quietly loosened epsilon past `1` (a vacuous, no-longer-real accuracy
+bound) to keep going. The fix is linear in the cube count instead:
+`K = ceil(min(1/delta, 3*ln(2/delta)) * (CUBES^2-1) / epsilon^2)` (see
+"Vazirani estimate" above for the derivation) -- cheap enough to reach
+`VARS=32` in under two minutes, measured live:
 
-| VARS | M=CUBES² | K | K·M (work) | time |
+| VARS | M=CUBES² | K | K·M (work) | measured time |
 |---|---|---|---|---|
-| 4 | 16 | 1758 | 28128 | ~0.2 s |
-| 8 | 64 | 31008 | 1984512 | a few seconds |
-| 16 | 256 | 508008 | 130050048 | tens of minutes |
-| 32 | 1024 | 8176008 | 8372744192 | ~26 hours (extrapolated) |
-| 64 | 4096 | 131007891 | 536608092672 | ~110 days (extrapolated) |
+| 4 | 16 | 118 | 1888 | 34.48 ms |
+| 8 | 64 | 493 | 31552 | 480.12 ms |
+| 16 | 256 | 1993 | 510208 | 5.88 s |
+| 32 | 1024 | 7993 | 8184832 | 1.40 min |
 
-`VARS=32`/`64` simply aren't reachable with meaningful accuracy on this
-per-trial-gate architecture -- keeping them in the sweep would mean either
-running this benchmark for months, or quietly loosening epsilon again
-until it's no longer a real accuracy bound (an earlier version of this
-sweep did exactly that: `epsilon=1182` at `VARS=64` is not a `< 1`
-tolerance, it's a number that satisfies the formula for a `K` small enough
-to be fast, with no actual accuracy guarantee behind it). Better to be
-explicit that meaningful accuracy has a size limit than to hide it behind
-a technically-passing but vacuous epsilon.
+(Full sweep, both parties, measured wall-clock: 90.5 s.)
 
 Two implementation problems this sweep surfaced along the way (both
 fixed, not workarounds specific to any one size -- they'd bite any
@@ -619,59 +636,67 @@ circuit at this scale):
 1. **`emp::UInt_T`'s 64-bit reveal ceiling.** `UInt_T<Ctx,N>::clear_t` is a
    plain `uint64_t` -- `.reveal()`/`.input()`/`.constant()` can't
    round-trip more than 64 bits, a hard emp-toolkit limit, not something
-   tunable. The final `KarpLubyEstimate` width
-   (`(VARS+bits_for(M)) + 17 + bits_for(K)`) stays under 64 bits at every
-   size this sweep now uses, but not in general (it's what originally
-   broke at `VARS=32`/`64` in the earlier five-size sweep).
-   `pipeline/karp_luby_pipeline.h`'s `reveal_wide<W>()` handles the general
-   case regardless: it slices any wide value into `<=64`-bit chunks
-   (`UInt_T::slice<Lo,Hi>`, pure wiring, no extra gates), reveals each
-   separately, and reassembles them into an `unsigned __int128` in
-   plaintext -- which is why `run_karp_luby_pipeline` returns
-   `unsigned __int128`, not `uint64_t`.
-2. **Stack overflow at large `K`.** `pipeline/karp_luby_pipeline.h`'s
-   `reciprocals` local is an `array<DivideLookupResult<Ctx,PRODUCT>,K>` --
-   at `VARS=16`'s `K=508008`, that's well over a hundred megabytes, several
-   times over Linux's 8 MiB default stack. `bench_karp_luby.cpp`'s `main()`
-   raises the soft `RLIMIT_STACK` to 256 MiB up front (Linux grows the main
-   thread's stack on demand up to whatever the limit is *at fault time*, so
-   doing this after the process has already started still works) rather
-   than requiring `ulimit -s` as an external prerequisite.
+   tunable. The final `VaziraniEstimate` width
+   (`(VARS+bits_for(M)) + 17 + bits_for(K)`) stays under 64 bits through
+   `VARS=16` (53 bits) but exceeds it at `VARS=32` (73 bits, at `K=7993`).
+   `pipeline/vazirani_pipeline.h`'s `reveal_wide<W>()` handles the general
+   case regardless of which size actually needs it: it slices any wide
+   value into `<=64`-bit chunks (`UInt_T::slice<Lo,Hi>`, pure wiring, no
+   extra gates), reveals each separately, and reassembles them into an
+   `unsigned __int128` in plaintext -- which is why `run_vazirani_pipeline`
+   returns `unsigned __int128`, not `uint64_t`.
+2. **Stack overflow at large `K`/`M`.** Under the old, buggy quadratic
+   formula, `pipeline/vazirani_pipeline.h`'s `reciprocals` local (an
+   `array<DivideLookupResult<Ctx,PRODUCT>,K>`) reached well over a hundred
+   megabytes at `K` in the hundreds of thousands -- several times over
+   Linux's 8 MiB default stack. The corrected formula's `K` values are all
+   small enough that this isn't actually triggered by the current sweep
+   any more (`reciprocals` tops out at `2.20 MiB` at `VARS=32`), but
+   `conjunction`/`weights`/`intervals` still scale with `M=CUBES^2`
+   regardless of `K`, and would need this again well before a hypothetical
+   `VARS=64` point. `bench_vazirani.cpp`'s `main()` still raises the soft
+   `RLIMIT_STACK` to 256 MiB up front as cheap headroom (Linux grows the
+   main thread's stack on demand up to whatever the limit is *at fault
+   time*, so doing this after the process has already started still
+   works) rather than requiring `ulimit -s` as an external prerequisite.
 
 ```sh
-./build/bench_karp_luby <party: 1=ALICE, 2=BOB> <path-to-dimacs-dnf-file>
+./build/bench_vazirani <party: 1=ALICE, 2=BOB> <path-to-dimacs-dnf-file>
 ```
 
 Same two-party launch convention as `sh2pc_demo` -- two terminals, or
-`./run.sh` adapted to point at `build/bench_karp_luby` instead. The same
+`./run.sh` adapted to point at `build/bench_vazirani` instead. The same
 small bundled `alice.dnf`/`bob.dnf` (`4` vars, `2` cubes) is reused at
 *every* size in the sweep: `dimacs_dnf::parse<VARS,CUBES>` only requires
 the file's declared vars/cubes fit within the capacity, padding the rest
 (see "DIMACS-DNF cube parser" above), and circuit cost is the same
 regardless of how much of that capacity is "real" vs. padding, by design
 -- so this is a valid way to benchmark performance at a given size without
-a separately crafted DNF file per size. Expect the `VARS=16` point alone
-to take on the order of tens of minutes -- run this in the background
-rather than waiting on it interactively. Example output (`estimate`
-varies run to run, since it depends on fresh joint-random samples each
-time):
+a separately crafted DNF file per size. The whole sweep now finishes in
+under two minutes (see the table above), so it's fine to just wait on it
+interactively. Example output (`estimate` varies run to run, since it
+depends on fresh joint-random samples each time):
 
 ```sh
-# [alice] VARS=4 CUBES=4  epsilon=0.8 delta=0.2 K=1758  estimate=9.98862  elapsed=176.39 ms  sent=67.31 MiB recv=259.20 KiB rounds=7035
+# [alice] VARS=4 CUBES=4  epsilon=0.8 delta=0.2 K=118  estimate=9.27966  elapsed=34.48 ms  sent=4.58 MiB recv=399.00 B rounds=475
 ```
 
 (Both parties print matching lines for every size -- confirmed by running
 it live: Alice and Bob agree exactly on `estimate`. `elapsed` is formatted
 by `format_duration()`, picking the largest readable unit -- us/ms/s/min/h
--- rather than always printing milliseconds: at `VARS=16`'s multi-minute
-runtime, a raw `elapsed_us/1000.0` in milliseconds prints in
-`std::ostream`'s default scientific notation past `~1e6`, e.g.
-`elapsed=1.07004e+06 ms`, exactly the unreadable case this avoids.)
+-- rather than always printing milliseconds: `VARS=32`'s `1.40 min` reads
+fine either way at the current sweep sizes, but a raw `elapsed_us/1000.0`
+in milliseconds prints in `std::ostream`'s default scientific notation
+past `~1e6` (e.g. `elapsed=1.07004e+06 ms` for a multi-minute run, which
+the old, buggy quadratic `vazirani_trials` routinely produced at
+`VARS=16` -- see above), so `format_duration()` stays in place as
+protection against that, not just for the sizes this sweep happens to hit
+today.)
 
 **Per-gadget breakdown.** Each size's summary line is followed by two
 sorted (biggest-first) tables answering "which gadget dominates" --
 network bytes and static memory, separately, since they're fundamentally
-different kinds of measurement (see `pipeline/karp_luby_pipeline.h`'s
+different kinds of measurement (see `pipeline/vazirani_pipeline.h`'s
 `PipelineBreakdown`/`PipelineMemoryReport` for why). Bytes are formatted
 with `format_bytes()` (binary units, KiB/MiB/GiB) matching
 `emp::NetIO::get_statistics_string()`'s own convention -- the same one
@@ -680,21 +705,21 @@ program's output, so bytes aren't reported two different ways in the same
 console dump:
 
 ```sh
-# [alice]     [net]  divide_lookup: sent=17.70 MiB recv=0.00 B total=17.70 MiB
-# [alice]     [net]  select_cube_index: sent=16.42 MiB recv=0.00 B total=16.42 MiB
-# [alice]     [net]  count_satisfied_cubes: sent=14.59 MiB recv=0.00 B total=14.59 MiB
-# [alice]     [net]  cube_at_index: sent=10.46 MiB recv=0.00 B total=10.46 MiB
-# [alice]     [net]  sample_in_range: sent=6.17 MiB recv=0.00 B total=6.17 MiB
-# [alice]     [net]  karp_luby_estimate: sent=1.49 MiB recv=0.00 B total=1.49 MiB
-# [alice]     [net]  random_assignment: sent=439.50 KiB recv=0.00 B total=439.50 KiB
-# [alice]     [net]  trial_random_input_feeding: sent=0.00 B recv=259.15 KiB total=259.15 KiB
+# [alice]     [net]  divide_lookup: sent=1.19 MiB recv=0.00 B total=1.19 MiB
+# [alice]     [net]  select_cube_index: sent=1.10 MiB recv=0.00 B total=1.10 MiB
+# [alice]     [net]  count_satisfied_cubes: sent=1003.00 KiB recv=0.00 B total=1003.00 KiB
+# [alice]     [net]  cube_at_index: sent=719.06 KiB recv=0.00 B total=719.06 KiB
+# [alice]     [net]  sample_in_range: sent=424.06 KiB recv=0.00 B total=424.06 KiB
+# [alice]     [net]  vazirani_estimate: sent=118.84 KiB recv=0.00 B total=118.84 KiB
+# [alice]     [net]  random_assignment: sent=29.50 KiB recv=0.00 B total=29.50 KiB
 # [alice]     [net]  cube_weights: sent=23.50 KiB recv=0.00 B total=23.50 KiB
 # [alice]     [net]  conjoin_dnf: sent=19.00 KiB recv=0.00 B total=19.00 KiB
 # [alice]     [net]  cube_intervals: sent=4.00 KiB recv=0.00 B total=4.00 KiB
 # [alice]     [net]  dnf_weight: sent=3.75 KiB recv=0.00 B total=3.75 KiB
-# [alice]     [net]  reveal: sent=37.00 B recv=37.00 B total=74.00 B
+# [alice]     [net]  trial_random_input_feeding: sent=0.00 B recv=354.00 B total=354.00 B
+# [alice]     [net]  reveal: sent=33.00 B recv=33.00 B total=66.00 B
 # [alice]     [net]  cube_input_feeding: sent=0.00 B recv=12.00 B total=12.00 B
-# [alice]     [mem]  reciprocals (K divide_lookup outputs): 494.44 KiB
+# [alice]     [mem]  reciprocals (K divide_lookup outputs): 33.19 KiB
 # [alice]     [mem]  conjunction (conjoin_dnf's output): 3.00 KiB
 # [alice]     [mem]  intervals (cube_intervals' output): 2.66 KiB
 # [alice]     [mem]  alice_cubes + bob_cubes: 1.50 KiB
@@ -702,23 +727,24 @@ console dump:
 # [alice]     [mem]  one trial's live locals (selected/assignment/satisfied_count): 416.00 B
 ```
 
-(`VARS=4` above, `K=1758` -- bandwidth is dominated by the per-trial
+(`VARS=4` above, `K=118` -- bandwidth is dominated by the per-trial
 gadgets, each running `K` times: `select_cube`'s three pieces
 (`sample_in_range`/`select_cube_index`/`cube_at_index`, called directly
-in `pipeline/karp_luby_pipeline.h` rather than through the composed
+in `pipeline/vazirani_pipeline.h` rather than through the composed
 `select_cube()`, specifically so each gets its own breakdown entry
 instead of one combined bucket) together roughly match
 `divide_lookup`/`count_satisfied_cubes`, while memory is dominated by
-`reciprocals`, the one structure that's actually `K`-sized. Since this
-sweep now keeps `M` small throughout (`CUBES<=16`, so `M<=256`) while `K`
-grows large (real epsilon/delta demands it), `reciprocals` and the
-per-trial gadgets dominate at every size in this sweep -- unlike the
-earlier five-size sweep, where `VARS=64`'s tiny `K=48` let the `M`-sized
-structures (`conjunction`/`intervals`/`weights`) take over instead. Which
-gadget "wins" depends on which of `K` or `M` a given point favors, which
-is why both get reported per size instead of just once.)
+`reciprocals`, the one structure that's actually `K`-sized. `reciprocals`
+stays on top at every size in the current sweep (`33.19 KiB` vs
+`conjunction`'s `3.00 KiB` at `VARS=4`; still ahead but much closer,
+`2.20 MiB` vs `1.06 MiB`, by `VARS=32`), since `K` still outpaces `M` at
+these sizes even under the corrected, much-gentler formula -- though the
+narrowing gap suggests an `M`-sized structure could plausibly take over
+at a size beyond what's currently swept. Which gadget "wins" depends on
+which of `K` or `M` a given point favors, which is why both get reported
+per size instead of just once.)
 
-**Network breakdown** (`PipelineBreakdown`, `pipeline/karp_luby_pipeline.h`)
+**Network breakdown** (`PipelineBreakdown`, `pipeline/vazirani_pipeline.h`)
 wraps each gadget call in a `measure(io, breakdown, name, fn)` helper that
 snapshots `io->send_counter`/`recv_counter` before and after, the same
 before/after pattern the top-level per-size numbers already use (see
@@ -728,7 +754,7 @@ one for the whole pipeline. Per-trial gadgets (`sample_in_range`,
 `count_satisfied_cubes`, `divide_lookup`) accumulate into the *same*
 named entry across all `K` trials, so e.g. `sample_in_range`'s number is
 that gadget's total over the whole run, not one trial's share.
-`run_karp_luby_pipeline`'s `io`/`breakdown` parameters both default to
+`run_vazirani_pipeline`'s `io`/`breakdown` parameters both default to
 `nullptr`; `src/main.cpp` never passes either, so `measure()` degrades to
 a plain direct call there -- the demo pays nothing for this.
 
@@ -752,9 +778,9 @@ together"), so there's no runtime flag for them.
 - `CMakeLists.txt` -- finds/links `emp-tool`, `emp-ot`, `emp-sh2pc`, OpenSSL, GMP.
 - `src/main.cpp` -- interactive two-party demo (small fixed `K`) of the pipeline below (see "Putting it together").
 - `src/pipeline/` -- the two-party circuit itself, shared by `main.cpp` and `src/bench/`:
-  - `karp_luby_pipeline.h` -- `run_karp_luby_pipeline<VARS,CUBES,K>` (returns `unsigned __int128`, via the file's own `reveal_wide<W>()`), `SH2PCSession`-only (not `Ctx`-generic like `gadgets/`); also `PipelineBreakdown`/`measure()` (optional per-gadget network accounting) and `PipelineMemoryReport`/`pipeline_memory_report<VARS,CUBES,K>()` (computed per-structure byte sizes) -- see "Benchmarks".
+  - `vazirani_pipeline.h` -- `run_vazirani_pipeline<VARS,CUBES,K>` (returns `unsigned __int128`, via the file's own `reveal_wide<W>()`), `SH2PCSession`-only (not `Ctx`-generic like `gadgets/`); also `PipelineBreakdown`/`measure()` (optional per-gadget network accounting) and `PipelineMemoryReport`/`pipeline_memory_report<VARS,CUBES,K>()` (computed per-structure byte sizes) -- see "Benchmarks".
 - `src/bench/` -- benchmarks, following emp-toolkit's own `bench_<component>.cpp` convention (see "Benchmarks"):
-  - `bench_karp_luby.cpp` -- times the real circuit across a `VARS=CUBES` sweep from `4` to `16`, all at ApproxMC's default `epsilon=0.8, delta=0.2`, with a per-gadget network/memory breakdown at every size.
+  - `bench_vazirani.cpp` -- times the real circuit across a `VARS=CUBES` sweep from `4` to `32`, all at ApproxMC's default `epsilon=0.8, delta=0.2`, with a per-gadget network/memory breakdown at every size.
 - `src/utils/` -- data-prep helpers with no emp-tool dependency:
   - `dimacs_dnf.h` -- the DIMACS-DNF cube parser (header-only: `parse<VARS,CUBES>` is a template).
 - `src/gadgets/` -- Ctx-generic circuit gadgets, reusable across sessions:
@@ -765,12 +791,12 @@ together"), so there's no runtime flag for them.
     - `cube_weight.h` -- the per-cube satisfying-assignment-count gadget.
     - `dnf_weight.h` -- sums cube weights into the whole DNF's satisfying-assignment count.
     - `cube_intervals.h` -- the exclusive prefix sum of cube weights.
-  - `karp_luby/` -- the Karp-Luby estimation stage:
+  - `vazirani/` -- the Vazirani estimation stage:
     - `select_cube.h` -- samples a joint random value, then selects and looks up the cube it lands in.
     - `random_assignment.h` -- extends a selected cube into a full random satisfying assignment.
     - `count_satisfied_cubes.h` -- counts how many cubes in an array an assignment satisfies.
     - `divide_lookup.h` -- oblivious fixed-point `1/count` lookup table.
-    - `karp_luby_estimate.h` -- combines `K` trials' reciprocals and the total weight into the raw Karp-Luby estimate.
+    - `vazirani_estimate.h` -- combines `K` trials' reciprocals and the total weight into the raw Vazirani estimate.
 - `src/tests/` -- unit tests, all built into the single `run_tests` binary:
   - `run_tests.cpp` -- the shared `main()`; calls each suite below.
   - `bits_of.h` -- pure-stdlib `bits_of<N>(s)` helper (a `'0'`/`'1'` string -> `std::array<bool,N>`), shared by every test file including `dimacs_dnf_test.cpp`.
@@ -778,8 +804,8 @@ together"), so there's no runtime flag for them.
   - `dimacs_dnf_test.cpp` -- tests for `utils/dimacs_dnf.h`.
   - `dnf/` -- tests for `gadgets/dnf/`:
     - `dnf_distribute_test.cpp`, `cube_weight_test.cpp`, `dnf_weight_test.cpp`, `cube_intervals_test.cpp` (all `emp::ClearSession`-based, no network).
-  - `karp_luby/` -- tests for `gadgets/karp_luby/`:
-    - `select_cube_test.cpp`, `random_assignment_test.cpp`, `count_satisfied_cubes_test.cpp`, `divide_lookup_test.cpp`, `karp_luby_estimate_test.cpp` (all `emp::ClearSession`-based, no network).
+  - `vazirani/` -- tests for `gadgets/vazirani/`:
+    - `select_cube_test.cpp`, `random_assignment_test.cpp`, `count_satisfied_cubes_test.cpp`, `divide_lookup_test.cpp`, `vazirani_estimate_test.cpp` (all `emp::ClearSession`-based, no network).
 - `sample.dnf` -- a standalone example DIMACS-DNF file (used by `dimacs_dnf_test.cpp`'s docs, not read by any binary).
-- `alice.dnf` / `bob.dnf` -- the two parties' example private inputs to `main.cpp` and `bench_karp_luby`.
+- `alice.dnf` / `bob.dnf` -- the two parties' example private inputs to `main.cpp` and `bench_vazirani`.
 - `run.sh` -- launches both parties of `sh2pc_demo` locally for a quick check.

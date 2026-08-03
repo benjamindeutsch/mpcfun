@@ -1,15 +1,15 @@
 // Interactive two-party demo of the DNF-intersection-counting pipeline
-// (pipeline/karp_luby_pipeline.h): each party's private input is a path to
+// (pipeline/vazirani_pipeline.h): each party's private input is a path to
 // its own DIMACS-DNF file. Parsing happens locally, in the clear, before
 // either party touches the network -- it's data prep, not a circuit. See
-// pipeline/karp_luby_pipeline.h's own file comment for what the circuit
-// itself does (conjunction -> weighting -> K Karp-Luby trials -> reveal);
+// pipeline/vazirani_pipeline.h's own file comment for what the circuit
+// itself does (conjunction -> weighting -> K Vazirani trials -> reveal);
 // this file is just the CLI/session/output wrapper around it.
 //
 // K here is a small, fixed constant for a fast interactive smoke test --
 // nowhere near enough trials for a real epsilon/confidence guarantee (see
-// gadgets/karp_luby/karp_luby_estimate.h's karp_luby_trials() for how to
-// pick a real K from a target epsilon). src/bench/bench_karp_luby.cpp uses
+// gadgets/vazirani/vazirani_estimate.h's vazirani_trials() for how to
+// pick a real K from a target epsilon). src/bench/bench_vazirani.cpp uses
 // that instead, for actual benchmarking.
 //
 // VARS/CUBES are the fixed capacity every DNF gets padded/validated against
@@ -19,10 +19,10 @@
 // be public in MPC; that's the whole reason dimacs_dnf::parse pads to a
 // fixed capacity instead of just sizing to whatever's in the file.
 //
-// Only the pipeline's final raw Karp-Luby numerator is revealed --
+// Only the pipeline's final raw Vazirani numerator is revealed --
 // everything else (the total weight, the interval boundaries, every
 // trial's sample/selected cube/assignment/satisfied count) stays private,
-// known to neither party. The Karp-Luby estimate itself is (the revealed
+// known to neither party. The Vazirani estimate itself is (the revealed
 // value) / (K * gadgets::lookup_scale<PRODUCT>()): both K and the lookup
 // scale are public compile-time constants, so that division happens for
 // free in plaintext after reveal, rather than spending circuit gates on it.
@@ -34,7 +34,7 @@
 // EMP_PORT env var), Bob connects to it (override the address with
 // EMP_PEER_IP).
 
-#include "pipeline/karp_luby_pipeline.h"
+#include "pipeline/vazirani_pipeline.h"
 
 #include <iostream>
 #include <stdexcept>
@@ -75,26 +75,26 @@ int main(int argc, char** argv) {
 
     SH2PCSession sess(io.get(), party);
 
-    // unsigned __int128, not uint64_t: run_karp_luby_pipeline's return
-    // type has to accommodate every VARS bench_karp_luby.cpp's sweep uses
-    // (up to 100 bits at VARS=64), even though this demo's own VARS=4
+    // unsigned __int128, not uint64_t: run_vazirani_pipeline's return
+    // type has to accommodate every VARS bench_vazirani.cpp's sweep uses
+    // (up to 73 bits at VARS=32), even though this demo's own VARS=4
     // result always fits safely in far fewer bits -- see
-    // pipeline/karp_luby_pipeline.h's top comment.
-    unsigned __int128 estimate_raw_out = run_karp_luby_pipeline<VARS, CUBES, K>(sess, my_dnf);
+    // pipeline/vazirani_pipeline.h's top comment.
+    unsigned __int128 estimate_raw_out = run_vazirani_pipeline<VARS, CUBES, K>(sess, my_dnf);
 
     sess.finalize();
 
     // Un-scale the raw estimate: divide by K * lookup_scale<PRODUCT>(),
     // both public compile-time constants, so this costs nothing in the
-    // circuit -- see gadgets/karp_luby/karp_luby_estimate.h.
+    // circuit -- see gadgets/vazirani/vazirani_estimate.h.
     uint64_t scale = lookup_scale<PRODUCT>();
-    double karp_luby_estimate_value = (double)estimate_raw_out / (double)((uint64_t)K * scale);
+    double vazirani_estimate_value = (double)estimate_raw_out / (double)((uint64_t)K * scale);
 
     std::string who = (party == ALICE) ? "[alice]" : "[bob]  ";
     std::cout << who << " file=" << path
-              << "  karp_luby_estimate_raw=" << (uint64_t)estimate_raw_out
+              << "  vazirani_estimate_raw=" << (uint64_t)estimate_raw_out
               << "  (K=" << K << ", scale=" << scale << ")"
-              << "  karp_luby_estimate=" << karp_luby_estimate_value << std::endl;
+              << "  vazirani_estimate=" << vazirani_estimate_value << std::endl;
 
     return 0;
 }

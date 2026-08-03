@@ -1,4 +1,4 @@
-// Unit tests for gadgets/karp_luby/count_satisfied_cubes.h, run entirely in
+// Unit tests for gadgets/vazirani/count_satisfied_cubes.h, run entirely in
 // the clear via emp::ClearSession: no OT, no network, no garbling, single
 // process -- same approach as select_cube_test.cpp.
 //
@@ -6,7 +6,7 @@
 // main(), the single entry point for every *_test.cpp under tests/ -- see
 // that file.
 
-#include "gadgets/karp_luby/count_satisfied_cubes.h"
+#include "gadgets/vazirani/count_satisfied_cubes.h"
 #include "tests/test_helpers.h"
 #include "emp-tool/ir/session/clear_session.h"
 

@@ -1,9 +1,9 @@
 // Shared emp-tool-dependent test helpers, built on top of tests/bits_of.h:
-// bits_of_uint<WIDTH> (a uint64_t's bits, for gadgets/karp_luby/select_cube.h's
+// bits_of_uint<WIDTH> (a uint64_t's bits, for gadgets/vazirani/select_cube.h's
 // SampleBits-shaped inputs) and make_cube<Ctx,N> (build a CircuitCube from
 // two bit strings + a PUBLIC input, on whatever session type -- ClearSession
 // throughout this test suite -- the caller passes in). Every gadget test
-// under tests/dnf/ and tests/karp_luby/ used to define its own near-copy of
+// under tests/dnf/ and tests/vazirani/ used to define its own near-copy of
 // these; this is the one shared version.
 
 #pragma once

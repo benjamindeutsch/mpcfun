@@ -12,7 +12,7 @@
 //
 // Ctx-generic (any BooleanContext), not tied to a specific session: the
 // same code type-checks under ClearSession (plaintext, for fast gadget
-// unit tests -- see tests/karp_luby/count_satisfied_cubes_test.cpp) and
+// unit tests -- see tests/vazirani/count_satisfied_cubes_test.cpp) and
 // SH2PCSession (the real 2PC protocol) unchanged.
 
 #pragma once

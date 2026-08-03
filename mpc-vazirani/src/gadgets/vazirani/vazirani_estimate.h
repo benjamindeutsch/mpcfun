@@ -1,5 +1,5 @@
-// karp_luby_estimate: dnf_weight * sum_{t=0}^{K-1} reciprocals[t] -- the
-// raw (unnormalized) numerator of the Karp-Luby estimator for a DNF's
+// vazirani_estimate: dnf_weight * sum_{t=0}^{K-1} reciprocals[t] -- the
+// raw (unnormalized) numerator of the Vazirani estimator for a DNF's
 // true satisfying-assignment count, given K independent samples of
 // (select_cube -> random_assignment -> count_satisfied_cubes ->
 // divide_lookup).
@@ -9,12 +9,12 @@
 // does that division for free in plaintext, on the *revealed* result,
 // rather than spending circuit gates on it.
 //
-// Why this is an unbiased estimator (Karp-Luby / the "coverage
+// Why this is an unbiased estimator (Vazirani / the "coverage
 // algorithm" for counting a union of possibly-overlapping sets, here the
 // sets of satisfying assignments of each cube): for a single trial,
 // E[1/count] = true_count / dnf_weight (this is exactly what makes the
-// algorithm work -- see gadgets/karp_luby/count_satisfied_cubes.h and
-// gadgets/karp_luby/select_cube.h), so E[dnf_weight * sum_t(1/count_t)] =
+// algorithm work -- see gadgets/vazirani/count_satisfied_cubes.h and
+// gadgets/vazirani/select_cube.h), so E[dnf_weight * sum_t(1/count_t)] =
 // K * true_count. Averaging over K trials (dividing by K) and correcting
 // divide_lookup's fixed-point SCALE recovers true_count, up to
 // divide_lookup's own (tiny, fixed, M-independent) rounding error -- see
@@ -22,13 +22,13 @@
 //
 // Ctx-generic (any BooleanContext), not tied to a specific session: the
 // same code type-checks under ClearSession (plaintext, for fast gadget
-// unit tests -- see tests/karp_luby/karp_luby_estimate_test.cpp) and
+// unit tests -- see tests/vazirani/vazirani_estimate_test.cpp) and
 // SH2PCSession (the real 2PC protocol) unchanged.
 
 #pragma once
 
 #include "gadgets/circuit_cube.h"
-#include "gadgets/karp_luby/divide_lookup.h"
+#include "gadgets/vazirani/divide_lookup.h"
 #include "gadgets/common.h"
 
 #include <cstdint>
@@ -48,17 +48,17 @@ constexpr double const_log(double x) {
 
 // K = ceil( min( (1/delta), 3*ln(2/delta) ) * (S/W_max - 1) / epsilon^2 )
 //
-// Karp-Luby: with X_t = 1/cov(a_t) in [0,1] and mu = E[X_t] = |U|/S,
+// Vazirani: with X_t = 1/cov(a_t) in [0,1] and mu = E[X_t] = |U|/S,
 //   Var(X_t) <= E[X_t^2] - mu^2 <= mu - mu^2   (since X_t <= 1)
 // so Var/mu^2 <= 1/mu - 1 = S/|U| - 1 <= S/W_max - 1 <= N - 1,
 // where N is the number of cubes in the CONJOINED dnf (cubes_a*cubes_b)
 // and W_max is the largest single cube weight. The bound is linear in
-// N, not quadratic -- that linearity IS the Karp-Luby theorem.
+// N, not quadratic -- that linearity IS the Vazirani theorem.
 //
 // Chebyshev gives the 1/delta form; since the summands are i.i.d. in
 // [0,1], multiplicative Chernoff gives the 3*ln(2/delta) form, which
 // wins for delta < ~0.15. Take whichever is smaller.
-constexpr int karp_luby_trials(double variance_ratio,  // S/W_max - 1, or N-1
+constexpr int vazirani_trials(double variance_ratio,  // S/W_max - 1, or N-1
                                double epsilon, double delta) {
   const double chebyshev = 1.0 / delta;
   const double chernoff  = 3.0 * const_log(2.0 / delta);
@@ -69,9 +69,9 @@ constexpr int karp_luby_trials(double variance_ratio,  // S/W_max - 1, or N-1
 }
 
 // Conservative wrapper when S and W_max aren't available at compile time.
-constexpr int karp_luby_trials(int cubes,
+constexpr int vazirani_trials(int cubes,
                                double epsilon, double delta) {
-  return karp_luby_trials((double)cubes * (double)cubes - 1.0,
+  return vazirani_trials((double)cubes * (double)cubes - 1.0,
                           epsilon, delta);
 }
 
@@ -85,19 +85,19 @@ constexpr int karp_luby_trials(int cubes,
 // takes a plain int -- forming that product just to hand most of it to a
 // narrowing cast is exactly the overflow this avoids.
 template <BooleanContext Ctx, int M, int K>
-using KarpLubySum = UInt_T<Ctx, (kDivideLookupScaleBits + 1) + bits_for(K)>;
+using VaziraniSum = UInt_T<Ctx, (kDivideLookupScaleBits + 1) + bits_for(K)>;
 
-// Wide enough for dnf_weight * KarpLubySum: the product of two values each
+// Wide enough for dnf_weight * VaziraniSum: the product of two values each
 // bounded by 2^width fits in the sum of their widths.
 template <BooleanContext Ctx, int N, int M, int K>
-using KarpLubyEstimate = UInt_T<Ctx, (N + bits_for(M)) + (kDivideLookupScaleBits + 1) + bits_for(K)>;
+using VaziraniEstimate = UInt_T<Ctx, (N + bits_for(M)) + (kDivideLookupScaleBits + 1) + bits_for(K)>;
 
 template <BooleanContext Ctx, int N, int M, int K>
-KarpLubyEstimate<Ctx, N, M, K> karp_luby_estimate(
+VaziraniEstimate<Ctx, N, M, K> vazirani_estimate(
         const DnfWeight<Ctx, N, M>& weight,
         const array<DivideLookupResult<Ctx, M>, (size_t)K>& reciprocals) {
-    using Sum = KarpLubySum<Ctx, M, K>;
-    using Result = KarpLubyEstimate<Ctx, N, M, K>;
+    using Sum = VaziraniSum<Ctx, M, K>;
+    using Result = VaziraniEstimate<Ctx, N, M, K>;
     Ctx& ctx = *weight.context();
 
     Sum sum = Sum::constant(ctx, 0);

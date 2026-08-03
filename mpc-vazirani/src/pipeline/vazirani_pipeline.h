@@ -1,15 +1,15 @@
-// run_karp_luby_pipeline: the real two-party circuit -- each party's own
-// parsed DNF (see utils/dimacs_dnf.h) in, a single revealed raw Karp-Luby
+// run_vazirani_pipeline: the real two-party circuit -- each party's own
+// parsed DNF (see utils/dimacs_dnf.h) in, a single revealed raw Vazirani
 // numerator out. "Raw" means un-normalized: see
-// gadgets/karp_luby/karp_luby_estimate.h for what the caller still has to
+// gadgets/vazirani/vazirani_estimate.h for what the caller still has to
 // do in plaintext (divide by K * gadgets::lookup_scale<CUBES*CUBES>()) to
 // get the actual estimate.
 //
 // This is the pipeline steps 1-7 documented in src/main.cpp's file
 // comment, lifted into a shared function so src/main.cpp (the interactive
-// demo, small fixed K) and src/bench/bench_karp_luby.cpp (the benchmark,
+// demo, small fixed K) and src/bench/bench_vazirani.cpp (the benchmark,
 // K chosen from a target epsilon via
-// gadgets/karp_luby/karp_luby_estimate.h's karp_luby_trials()) don't each
+// gadgets/vazirani/vazirani_estimate.h's vazirani_trials()) don't each
 // carry their own copy of it.
 //
 // Not Ctx-generic like the gadgets/ headers -- this is SH2PCSession-only
@@ -19,11 +19,14 @@
 // Returns an unsigned __int128, not a uint64_t: emp::UInt_T<Ctx,N>'s
 // clear_t is a plain uint64_t (a hard emp-toolkit ceiling -- .reveal()/
 // .input()/.constant(uint64_t) on a UInt_T literally cannot round-trip
-// more than 64 bits), but KarpLubyEstimate<Ctx,VARS,PRODUCT,K>'s width is
+// more than 64 bits), but VaziraniEstimate<Ctx,VARS,PRODUCT,K>'s width is
 // (VARS + bits_for(PRODUCT)) + (kDivideLookupScaleBits+1) + bits_for(K) --
-// comfortably under 64 bits at VARS=16 (52 bits), but over it by VARS=32
-// (68 bits) and further over by VARS=64 (100 bits). See reveal_wide()
-// below for how the final reveal handles that.
+// comfortably under 64 bits at VARS=16 (53 bits), but over it by VARS=32
+// (73 bits, at K=7993 -- see gadgets/vazirani/vazirani_estimate.h's
+// vazirani_trials() and src/bench/bench_vazirani.cpp for where that K
+// comes from). See reveal_wide() below for how the final reveal handles
+// that -- it's width-general (recurses on however far over 64 bits a
+// value is), not hardcoded to any one sweep size.
 
 #pragma once
 
@@ -34,11 +37,11 @@
 #include "gadgets/dnf/cube_weight.h"
 #include "gadgets/dnf/dnf_weight.h"
 #include "gadgets/dnf/cube_intervals.h"
-#include "gadgets/karp_luby/select_cube.h"
-#include "gadgets/karp_luby/random_assignment.h"
-#include "gadgets/karp_luby/count_satisfied_cubes.h"
-#include "gadgets/karp_luby/divide_lookup.h"
-#include "gadgets/karp_luby/karp_luby_estimate.h"
+#include "gadgets/vazirani/select_cube.h"
+#include "gadgets/vazirani/random_assignment.h"
+#include "gadgets/vazirani/count_satisfied_cubes.h"
+#include "gadgets/vazirani/divide_lookup.h"
+#include "gadgets/vazirani/vazirani_estimate.h"
 
 #include <array>
 #include <cstddef>
@@ -58,9 +61,9 @@ using emp::PUBLIC;
 using Ctx = SH2PCSession::ctx_t;
 
 // PipelineBreakdown: per-gadget network bytes, for callers that want to
-// see which gadget dominates bandwidth (see src/bench/bench_karp_luby.cpp)
+// see which gadget dominates bandwidth (see src/bench/bench_vazirani.cpp)
 // rather than just the pipeline's total. Not used by src/main.cpp, which
-// never constructs one -- run_karp_luby_pipeline's breakdown/io parameters
+// never constructs one -- run_vazirani_pipeline's breakdown/io parameters
 // default to nullptr, so that call site pays nothing for this.
 struct PipelineBreakdown {
     struct Phase {
@@ -72,7 +75,7 @@ struct PipelineBreakdown {
 
     // Accumulates into the named phase (creating it on first use) --
     // per-trial gadgets (select_cube, random_assignment, ...) call this
-    // once per Karp-Luby trial, so the same name's bytes sum across all K.
+    // once per Vazirani trial, so the same name's bytes sum across all K.
     void add(const char* name, uint64_t sent, uint64_t recv) {
         for (auto& p : phases) {
             if (p.name == name) {
@@ -140,9 +143,12 @@ PipelineMemoryReport pipeline_memory_report() {
 // (W-64)-bit chunk (UInt_T::slice<Lo,Hi>, pure wiring -- no extra gates),
 // reveals each separately (recursing again if the high chunk is itself
 // still over 64 bits), and reassembles them into an unsigned __int128 in
-// plaintext -- wide enough for every width this pipeline produces, up to
-// VARS=64's 100 bits. Scoped to PUBLIC reveals only (every caller in this
-// file only ever needs that); ALICE/BOB/XOR aren't handled.
+// plaintext -- the recursion itself handles any W, but the __int128
+// accumulator caps the usable range at 128 bits total, comfortably above
+// what this pipeline's sweep needs today (73 bits at VARS=32 -- see this
+// file's top comment) but worth knowing if a future sweep size needs more.
+// Scoped to PUBLIC reveals only (every caller in this file only ever
+// needs that); ALICE/BOB/XOR aren't handled.
 template <int W>
 unsigned __int128 reveal_wide(SH2PCSession& sess, const emp::UInt_T<Ctx, W>& value) {
     if constexpr (W <= 64) {
@@ -155,11 +161,11 @@ unsigned __int128 reveal_wide(SH2PCSession& sess, const emp::UInt_T<Ctx, W>& val
 }
 
 // io/breakdown: optional, both default nullptr -- pass both together (from
-// src/bench/bench_karp_luby.cpp) to get a per-gadget network breakdown (see
+// src/bench/bench_vazirani.cpp) to get a per-gadget network breakdown (see
 // PipelineBreakdown above); src/main.cpp passes neither, so every
 // measure() call below is a plain, zero-overhead direct call there.
 template <int VARS, int CUBES, int K>
-unsigned __int128 run_karp_luby_pipeline(SH2PCSession& sess, const dimacs_dnf::Dnf<VARS, CUBES>& my_dnf,
+unsigned __int128 run_vazirani_pipeline(SH2PCSession& sess, const dimacs_dnf::Dnf<VARS, CUBES>& my_dnf,
                                           NetIO* io = nullptr, PipelineBreakdown* breakdown = nullptr) {
     using namespace gadgets;
     using BV = BitVec_T<Ctx, VARS>;
@@ -201,7 +207,7 @@ unsigned __int128 run_karp_luby_pipeline(SH2PCSession& sess, const dimacs_dnf::D
     array<TotalWeight, PRODUCT + 1> intervals =
         measure(io, breakdown, "cube_intervals", [&] { return cube_intervals<Ctx, VARS, PRODUCT>(weights); });
 
-    // K independent Karp-Luby trials. Each trial draws its own fresh joint
+    // K independent Vazirani trials. Each trial draws its own fresh joint
     // randomness (both for select_cube's sampling step and for
     // random_assignment's free-variable fill), so the K samples are
     // independent -- required for the estimator's variance to actually
@@ -221,7 +227,7 @@ unsigned __int128 run_karp_luby_pipeline(SH2PCSession& sess, const dimacs_dnf::D
         RandBits bob_r   = sess.input<RandBits>(BOB,   my_random_bits);
         if (breakdown) breakdown->add("trial_random_input_feeding", io->send_counter - trial_input_sent0, io->recv_counter - trial_input_recv0);
 
-        // select_cube's three pieces (gadgets/karp_luby/select_cube.h),
+        // select_cube's three pieces (gadgets/vazirani/select_cube.h),
         // called directly instead of through the composed select_cube()
         // so each gets its own breakdown entry rather than being lumped
         // into one "select_cube" bucket.
@@ -236,7 +242,7 @@ unsigned __int128 run_karp_luby_pipeline(SH2PCSession& sess, const dimacs_dnf::D
         });
 
         // Extend the selected cube into a full random satisfying
-        // assignment (gadgets/karp_luby/random_assignment.h): a second,
+        // assignment (gadgets/vazirani/random_assignment.h): a second,
         // independent joint random bitstring (same free-XOR construction,
         // drawn/fed the same way) fills in whatever the cube leaves
         // unconstrained.
@@ -260,11 +266,11 @@ unsigned __int128 run_karp_luby_pipeline(SH2PCSession& sess, const dimacs_dnf::D
         });
     }
 
-    KarpLubyEstimate<Ctx, VARS, PRODUCT, K> estimate = measure(io, breakdown, "karp_luby_estimate", [&] {
-        return karp_luby_estimate<Ctx, VARS, PRODUCT, K>(total, reciprocals);
+    VaziraniEstimate<Ctx, VARS, PRODUCT, K> estimate = measure(io, breakdown, "vazirani_estimate", [&] {
+        return vazirani_estimate<Ctx, VARS, PRODUCT, K>(total, reciprocals);
     });
 
     return measure(io, breakdown, "reveal", [&] {
-        return reveal_wide<KarpLubyEstimate<Ctx, VARS, PRODUCT, K>::width()>(sess, estimate);
+        return reveal_wide<VaziraniEstimate<Ctx, VARS, PRODUCT, K>::width()>(sess, estimate);
     });
 }

@@ -1,12 +1,12 @@
-// Unit tests for gadgets/karp_luby/karp_luby_estimate.h, run entirely in
+// Unit tests for gadgets/vazirani/vazirani_estimate.h, run entirely in
 // the clear via emp::ClearSession: no OT, no network, no garbling, single
 // process -- same approach as select_cube_test.cpp.
 //
-// run_karp_luby_estimate_tests() is called from tests/run_tests.cpp's
+// run_vazirani_estimate_tests() is called from tests/run_tests.cpp's
 // main(), the single entry point for every *_test.cpp under tests/ -- see
 // that file.
 
-#include "gadgets/karp_luby/karp_luby_estimate.h"
+#include "gadgets/vazirani/vazirani_estimate.h"
 #include "emp-tool/ir/session/clear_session.h"
 
 #include <array>
@@ -31,7 +31,7 @@ void check(ClearSession& sess, const char* name, uint64_t weight_val,
     std::array<R, K> reciprocals{};
     for (int t = 0; t < K; ++t) reciprocals[(std::size_t)t] = sess.input<R>(PUBLIC, reciprocal_vals[(std::size_t)t]);
 
-    uint64_t got = sess.reveal(karp_luby_estimate<Ctx, N, M, K>(weight, reciprocals), PUBLIC).value();
+    uint64_t got = sess.reveal(vazirani_estimate<Ctx, N, M, K>(weight, reciprocals), PUBLIC).value();
     if (got != expect) {
         std::fprintf(stderr, "FAIL %s (got %llu, expected %llu)\n", name,
                       (unsigned long long)got, (unsigned long long)expect);
@@ -42,7 +42,7 @@ void check(ClearSession& sess, const char* name, uint64_t weight_val,
 
 }  // namespace
 
-int run_karp_luby_estimate_tests() {
+int run_vazirani_estimate_tests() {
     ClearSession sess;
 
     // weight=20 (this pipeline's real dnf_weight), reciprocals from
@@ -62,6 +62,6 @@ int run_karp_luby_estimate_tests() {
     // is 0 regardless of the reciprocals.
     check(sess, "weight=0 -> estimate=0", 0, {65536, 32768, 16384}, 0);
 
-    std::printf("karp_luby_estimate_test: all checks passed\n");
+    std::printf("vazirani_estimate_test: all checks passed\n");
     return 0;
 }

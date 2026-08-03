@@ -1,28 +1,32 @@
-// bench_karp_luby: times the real two-party Karp-Luby circuit
-// (pipeline/karp_luby_pipeline.h) across a sweep of (VARS,CUBES) sizes
-// (VARS=CUBES, doubling from 4 to 16), each at a *fixed*, meaningful
+// bench_vazirani: times the real two-party Vazirani circuit
+// (pipeline/vazirani_pipeline.h) across a sweep of (VARS,CUBES) sizes
+// (VARS=CUBES, doubling from 4 to 32), each at a *fixed*, meaningful
 // epsilon/delta -- ApproxMC's own defaults, epsilon=0.8 (tolerance) and
 // delta=0.2 (failure probability, i.e. success probability >= 1-delta =
-// 0.8) -- rather than the loosened-per-size epsilon an earlier version of
-// this file used just to keep the sweep fast.
+// 0.8).
 //
-// Why the sweep stops at VARS=16, not 64: K = ceil((1/delta)*
-// (VARS^2-1)^2/epsilon^2) (gadgets/karp_luby/karp_luby_estimate.h's
-// karp_luby_trials()) grows as O(VARS^4). At epsilon=0.8, delta=0.2, that's:
+// K = gadgets::vazirani_trials(CUBES, epsilon, delta), which (after an
+// earlier bug -- see that function's own comment) is:
 //
-//   VARS   M=CUBES^2   K            K*M (work)
-//   4      16          1758         28128
-//   8      64          31008        1984512
-//   16     256         508008       130050048
-//   32     1024        8176008      8372744192      (~26 hours, extrapolated)
-//   64     4096        131007891    536608092672     (~110 days, extrapolated)
+//   K = ceil(min(1/delta, 3*ln(2/delta)) * (CUBES^2 - 1) / epsilon^2)
 //
-// (extrapolated from this sweep's own measured work-vs-time relationship
-// at the smaller sizes -- see "Benchmarks" in README.md). VARS=32/64
-// aren't reachable with meaningful accuracy on this per-trial-gate
-// architecture; keeping them in the sweep would mean either running this
-// benchmark for months, or silently going back to the meaningless
-// loosened-epsilon regime this change was specifically meant to replace.
+// linear in CUBES^2 (the number of cubes in the conjoined DNF), not
+// quadratic in it -- that linearity is the actual Vazirani theorem. An
+// earlier, incorrect version of vazirani_trials was quadratic in
+// (VARS^2-1) instead, which made K explode as O(VARS^4) and made anything
+// past VARS=16 intractable (billions of trials, hours to months). The
+// corrected, linear formula is cheap enough to sweep all the way to
+// VARS=32 in under two minutes total, measured live:
+//
+//   CUBES   M=CUBES^2   K       K*M (work)   measured elapsed
+//   4       16          118     1888         34.48 ms
+//   8       64          493     31552        480.12 ms
+//   16      256         1993    510208       5.88 s
+//   32      1024        7993    8184832      1.40 min
+//
+// (`c = min(1/delta, 3*ln(2/delta))` happens to be `5` -- i.e. Chebyshev,
+// not the Chernoff alternative -- at this epsilon/delta; see
+// vazirani_trials' own comment for when each wins.)
 //
 // It follows emp-toolkit's own benchmark conventions (see
 // emp-tool/docs/benchmark_conventions.md): the timed region is wrapped in
@@ -35,7 +39,7 @@
 // reused across every config here.
 //
 // Usage:
-//   ./bench_karp_luby <party: 1=ALICE, 2=BOB> <path-to-dimacs-dnf-file>
+//   ./bench_vazirani <party: 1=ALICE, 2=BOB> <path-to-dimacs-dnf-file>
 //
 // Same two-party launch convention as sh2pc_demo: Alice listens on a fixed
 // localhost port (default 12345, override with EMP_PORT), Bob connects
@@ -47,12 +51,8 @@
 // design (that's the whole point of padding), so this is a valid way to
 // benchmark performance at a given size without a separately crafted DNF
 // file per size.
-//
-// Expect the VARS=16 point alone to take on the order of tens of minutes
-// (K=508008, each trial scanning M=256 cubes) -- run this in the
-// background rather than waiting on it interactively.
 
-#include "pipeline/karp_luby_pipeline.h"
+#include "pipeline/vazirani_pipeline.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -145,7 +145,11 @@ template <int VARS>
 void run_one(SH2PCSession& sess, NetIO* io, const std::string& path, const std::string& who) {
     constexpr int CUBES = VARS;
     constexpr int PRODUCT = CUBES * CUBES;
-    constexpr int K = karp_luby_trials(VARS, EPSILON, DELTA);
+    // CUBES, not VARS: vazirani_trials(cubes, ...) bounds K by the number
+    // of cubes in the conjoined DNF (CUBES^2 - 1, per its own comment),
+    // not by VARS -- they happen to be equal in this sweep (VARS=CUBES
+    // above), but CUBES is the semantically correct argument.
+    constexpr int K = vazirani_trials(CUBES, EPSILON, DELTA);
 
     dimacs_dnf::Dnf<VARS, CUBES> my_dnf;
     try {
@@ -165,9 +169,9 @@ void run_one(SH2PCSession& sess, NetIO* io, const std::string& path, const std::
     uint64_t sent0 = io->send_counter, recv0 = io->recv_counter, rounds0 = io->rounds;
     auto start = clock_start();
     // unsigned __int128, not uint64_t: emp::UInt_T's reveal ceiling is 64
-    // bits -- see pipeline/karp_luby_pipeline.h's top comment.
+    // bits -- see pipeline/vazirani_pipeline.h's top comment.
     PipelineBreakdown breakdown;
-    unsigned __int128 estimate_raw = run_karp_luby_pipeline<VARS, CUBES, K>(sess, my_dnf, io, &breakdown);
+    unsigned __int128 estimate_raw = run_vazirani_pipeline<VARS, CUBES, K>(sess, my_dnf, io, &breakdown);
     double elapsed_us = time_from(start);
     uint64_t sent = io->send_counter - sent0;
     uint64_t recv = io->recv_counter - recv0;
@@ -191,10 +195,13 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // The VARS=16 sweep point needs far more than the 8 MiB Linux default
-    // stack: pipeline/karp_luby_pipeline.h's reciprocals local is an array
-    // of K=508008 elements there -- well over a hundred megabytes. Raise
-    // the soft limit up front -- on Linux, the main thread's stack grows
+    // None of this sweep's current sizes actually need more than the 8 MiB
+    // Linux default stack any more (vazirani_trials' K values are all
+    // small now -- see this file's top comment), but pipeline/
+    // vazirani_pipeline.h's conjunction/weights/intervals locals scale
+    // with M=CUBES^2 regardless of K, and would need this again well
+    // before a hypothetical VARS=64 sweep point. Raise the soft limit up
+    // front as cheap headroom -- on Linux, the main thread's stack grows
     // on demand up to whatever RLIMIT_STACK is at fault time (not just at
     // exec time), so doing this here, after the process has already
     // started, still works.
@@ -217,6 +224,7 @@ int main(int argc, char** argv) {
     run_one<8>(sess, io.get(), path, who);
     run_one<16>(sess, io.get(), path, who);
     run_one<32>(sess, io.get(), path, who);
+    run_one<64>(sess, io.get(), path, who);
 
     sess.finalize();
     return 0;
