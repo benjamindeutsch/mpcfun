@@ -72,6 +72,21 @@ target_link_libraries(bench_vazirani PRIVATE
 )
 target_include_directories(bench_vazirani PRIVATE ${GMP_INCLUDE_DIR} ${MPC_VAZIRANI_SRC_DIR})
 
+# Comparison benchmark: same sweep/epsilon/delta as bench_vazirani, but
+# drives both pipeline/vazirani_pipeline.h and pipeline/karp_luby_pipeline.h
+# through bench/bench_common.h's generic Adapter-based sweep runner,
+# printing both algorithms' results side by side per size.
+add_executable(bench_compare src/bench/bench_compare.cpp)
+target_link_libraries(bench_compare PRIVATE
+    emp-sh2pc::emp-sh2pc
+    emp-ot::emp-ot
+    emp-tool::emp-tool
+    OpenSSL::Crypto
+    ${GMP_LIBRARY}
+    ${GMPXX_LIBRARY}
+)
+target_include_directories(bench_compare PRIVATE ${GMP_INCLUDE_DIR} ${MPC_VAZIRANI_SRC_DIR})
+
 # One test binary for every tests/*_test.cpp (see run_tests.cpp): each
 # exposes a run_*_tests() called from run_tests.cpp's main(), so a new test
 # file only needs adding to this source list + a declaration+call in

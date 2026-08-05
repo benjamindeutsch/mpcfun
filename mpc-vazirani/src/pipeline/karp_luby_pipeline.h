@@ -1,32 +1,24 @@
-// run_vazirani_pipeline: the real two-party circuit -- each party's own
-// parsed DNF (see utils/dimacs_dnf.h) in, a single revealed raw Vazirani
+// run_karp_luby_pipeline: the Karp-Luby sibling of
+// pipeline/vazirani_pipeline.h's run_vazirani_pipeline -- each party's own
+// parsed DNF (see utils/dimacs_dnf.h) in, a single revealed raw Karp-Luby
 // numerator out. "Raw" means un-normalized: see
-// gadgets/vazirani/vazirani_estimate.h for what the caller still has to
-// do in plaintext (divide by K * gadgets::lookup_scale<CUBES*CUBES>()) to
-// get the actual estimate.
+// gadgets/karp_luby/karp_luby_estimate.h for what the caller still has to
+// do in plaintext (divide by K) to get the actual estimate.
 //
-// This is the pipeline steps 1-7 documented in src/main.cpp's file
-// comment, lifted into a shared function so src/main.cpp (the interactive
-// demo, small fixed K) and src/bench/bench_vazirani.cpp (the benchmark,
-// K chosen from a target epsilon via
-// gadgets/vazirani/vazirani_estimate.h's vazirani_trials()) don't each
-// carry their own copy of it.
+// Identical to run_vazirani_pipeline through "sample a cube weighted by
+// its model count, then sample a satisfying assignment of it" (every
+// gadgets/general/* call below matches run_vazirani_pipeline verbatim).
+// The two pipelines diverge only in what each trial does with the sampled
+// assignment: Vazirani counts how many conjunction cubes it satisfies and
+// looks up 1/count (gadgets/vazirani/count_satisfied_cubes.h +
+// gadgets/vazirani/divide_lookup.h); Karp-Luby instead checks whether the
+// sampled cube is the *canonical* (lowest-indexed) cube covering that
+// assignment (gadgets/karp_luby/is_canonical_sample.h) and accumulates a
+// {0,1} indicator per trial instead of a reciprocal.
 //
 // Not Ctx-generic like the gadgets/ headers -- this is SH2PCSession-only
 // (it does real network I/O via sess.input/sess.reveal), unlike the pure
 // wire-level gadgets it calls, which stay testable under ClearSession.
-//
-// Returns an unsigned __int128, not a uint64_t: emp::UInt_T<Ctx,N>'s
-// clear_t is a plain uint64_t (a hard emp-toolkit ceiling -- .reveal()/
-// .input()/.constant(uint64_t) on a UInt_T literally cannot round-trip
-// more than 64 bits), but VaziraniEstimate<Ctx,VARS,PRODUCT,K>'s width is
-// (VARS + bits_for(PRODUCT)) + (kDivideLookupScaleBits+1) + bits_for(K) --
-// comfortably under 64 bits at VARS=16 (53 bits), but over it by VARS=32
-// (73 bits, at K=7993 -- see gadgets/vazirani/vazirani_estimate.h's
-// vazirani_trials() and src/bench/bench_vazirani.cpp for where that K
-// comes from). See reveal_wide() below for how the final reveal handles
-// that -- it's width-general (recurses on however far over 64 bits a
-// value is), not hardcoded to any one sweep size.
 
 #pragma once
 
@@ -39,9 +31,8 @@
 #include "gadgets/general/cube_intervals.h"
 #include "gadgets/general/select_cube.h"
 #include "gadgets/general/random_assignment.h"
-#include "gadgets/vazirani/count_satisfied_cubes.h"
-#include "gadgets/vazirani/divide_lookup.h"
-#include "gadgets/vazirani/vazirani_estimate.h"
+#include "gadgets/karp_luby/is_canonical_sample.h"
+#include "gadgets/karp_luby/karp_luby_estimate.h"
 #include "pipeline/instrumentation.h"
 
 #include <array>
@@ -61,17 +52,15 @@ using emp::PUBLIC;
 
 using Ctx = SH2PCSession::ctx_t;
 
-// PipelineBreakdown/measure/PipelineMemoryReport/reveal_wide now live in
-// pipeline/instrumentation.h (shared with pipeline/karp_luby_pipeline.h) --
-// nothing here was Vazirani-specific. Only this pipeline's own
-// vazirani_pipeline_memory_report() (below), whose entries reflect this
-// pipeline's own locals, stays local to this file. (Named per-algorithm,
-// not just "pipeline_memory_report", since pipeline/karp_luby_pipeline.h
-// defines its own analogous function -- bench_compare.cpp includes both
-// headers in one translation unit, so a shared name would collide.)
-
+// This pipeline's own memory report -- entries reflect its own locals
+// (`indicators`, a K-sized array<Bit_T,K>, in place of
+// vazirani_pipeline.h's much larger `reciprocals`; see that file's own
+// vazirani_pipeline_memory_report for the shared shape this mirrors).
+// Named per-algorithm (not just "pipeline_memory_report") since
+// bench_compare.cpp includes both pipeline headers in one translation
+// unit, so a shared name would collide with vazirani_pipeline.h's.
 template <int VARS, int CUBES, int K>
-PipelineMemoryReport vazirani_pipeline_memory_report() {
+PipelineMemoryReport karp_luby_pipeline_memory_report() {
     using namespace gadgets;
     constexpr int PRODUCT = CUBES * CUBES;
     using TotalWeight = DnfWeight<Ctx, VARS, PRODUCT>;
@@ -81,18 +70,20 @@ PipelineMemoryReport vazirani_pipeline_memory_report() {
     r.add("conjunction (conjoin_dnf's output)", (uint64_t)PRODUCT * sizeof(CircuitCube<Ctx, VARS>));
     r.add("weights (cube_weights' output)", (uint64_t)PRODUCT * sizeof(CubeWeight<Ctx, VARS>));
     r.add("intervals (cube_intervals' output)", (uint64_t)(PRODUCT + 1) * sizeof(TotalWeight));
-    r.add("reciprocals (K divide_lookup outputs)", (uint64_t)K * sizeof(DivideLookupResult<Ctx, PRODUCT>));
-    r.add("one trial's live locals (selected/assignment/satisfied_count)",
-          sizeof(CubeData<Ctx, VARS>) + 2 * sizeof(BitVec_T<Ctx, VARS>) + sizeof(SatisfiedCount<Ctx, PRODUCT>));
+    r.add("indicators (K is_canonical_sample outputs)", (uint64_t)K * sizeof(Bit_T<Ctx>));
+    r.add("one trial's live locals (selected/assignment/canonical)",
+          sizeof(CubeData<Ctx, VARS>) + 2 * sizeof(BitVec_T<Ctx, VARS>) + sizeof(Bit_T<Ctx>));
     return r;
 }
 
 // io/breakdown: optional, both default nullptr -- pass both together (from
-// src/bench/bench_vazirani.cpp) to get a per-gadget network breakdown (see
-// PipelineBreakdown above); src/main.cpp passes neither, so every
-// measure() call below is a plain, zero-overhead direct call there.
+// src/bench/bench_vazirani.cpp or bench_compare.cpp) to get a per-gadget
+// network breakdown (see pipeline/instrumentation.h's PipelineBreakdown);
+// no caller currently passes neither (unlike vazirani_pipeline.h's
+// src/main.cpp demo), but the default keeps this pipeline usable the same
+// way if a Karp-Luby demo is added later.
 template <int VARS, int CUBES, int K>
-unsigned __int128 run_vazirani_pipeline(SH2PCSession& sess, const dimacs_dnf::Dnf<VARS, CUBES>& my_dnf,
+unsigned __int128 run_karp_luby_pipeline(SH2PCSession& sess, const dimacs_dnf::Dnf<VARS, CUBES>& my_dnf,
                                           NetIO* io = nullptr, PipelineBreakdown* breakdown = nullptr) {
     using namespace gadgets;
     using BV = BitVec_T<Ctx, VARS>;
@@ -134,16 +125,18 @@ unsigned __int128 run_vazirani_pipeline(SH2PCSession& sess, const dimacs_dnf::Dn
     array<TotalWeight, PRODUCT + 1> intervals =
         measure(io, breakdown, "cube_intervals", [&] { return cube_intervals<Ctx, VARS, PRODUCT>(weights); });
 
-    // K independent Vazirani trials. Each trial draws its own fresh joint
+    // K independent Karp-Luby trials. Each trial draws its own fresh joint
     // randomness (both for select_cube's sampling step and for
     // random_assignment's free-variable fill), so the K samples are
     // independent -- required for the estimator's variance to actually
     // shrink with K. Nothing about any trial is revealed -- only the final
     // combined estimate is, below. Per-trial breakdown entries accumulate
-    // across all K trials (see PipelineBreakdown::add above), so e.g.
+    // across all K trials (see PipelineBreakdown::add), so e.g.
     // "sample_in_range" ends up as that gadget's total over the whole run.
+    // This loop is identical to run_vazirani_pipeline's through
+    // random_assignment -- see that file for the per-step comments.
     using RandBits = SampleBits<Ctx, VARS, PRODUCT>;
-    array<DivideLookupResult<Ctx, PRODUCT>, K> reciprocals{};
+    array<Bit_T<Ctx>, K> indicators{};
 
     for (int t = 0; t < K; ++t) {
         uint64_t trial_input_sent0 = breakdown ? io->send_counter : 0;
@@ -155,9 +148,11 @@ unsigned __int128 run_vazirani_pipeline(SH2PCSession& sess, const dimacs_dnf::Dn
         if (breakdown) breakdown->add("trial_random_input_feeding", io->send_counter - trial_input_sent0, io->recv_counter - trial_input_recv0);
 
         // select_cube's three pieces (gadgets/general/select_cube.h),
-        // called directly instead of through the composed select_cube()
-        // so each gets its own breakdown entry rather than being lumped
-        // into one "select_cube" bucket.
+        // called directly instead of through the composed select_cube() so
+        // each gets its own breakdown entry rather than being lumped into
+        // one "select_cube" bucket. Unlike run_vazirani_pipeline, `index`
+        // itself is kept around (not just `selected`): is_canonical_sample
+        // below needs to compare other cubes' indices against it.
         TotalWeight z = measure(io, breakdown, "sample_in_range", [&] {
             return sample_in_range<Ctx, VARS, PRODUCT>(alice_r, bob_r, total);
         });
@@ -185,48 +180,49 @@ unsigned __int128 run_vazirani_pipeline(SH2PCSession& sess, const dimacs_dnf::Dn
             return random_assignment<Ctx, VARS>(selected, assignment_alice_r, assignment_bob_r);
         });
 
-        SatisfiedCount<Ctx, PRODUCT> satisfied_count = measure(io, breakdown, "count_satisfied_cubes", [&] {
-            return count_satisfied_cubes<Ctx, VARS, PRODUCT>(assignment, conjunction);
-        });
-        reciprocals[(size_t)t] = measure(io, breakdown, "divide_lookup", [&] {
-            return divide_lookup<Ctx, PRODUCT>(satisfied_count);
+        // Karp-Luby's divergence point (see
+        // gadgets/karp_luby/is_canonical_sample.h): is the sampled cube the
+        // lowest-indexed cube this assignment satisfies?
+        indicators[(size_t)t] = measure(io, breakdown, "is_canonical_sample", [&] {
+            return is_canonical_sample<Ctx, VARS, PRODUCT>(index, assignment, conjunction);
         });
     }
 
-    VaziraniEstimate<Ctx, VARS, PRODUCT, K> estimate = measure(io, breakdown, "vazirani_estimate", [&] {
-        return vazirani_estimate<Ctx, VARS, PRODUCT, K>(total, reciprocals);
+    KarpLubyEstimate<Ctx, VARS, PRODUCT, K> estimate = measure(io, breakdown, "karp_luby_estimate", [&] {
+        return karp_luby_estimate<Ctx, VARS, PRODUCT, K>(total, indicators);
     });
 
     return measure(io, breakdown, "reveal", [&] {
-        return reveal_wide<VaziraniEstimate<Ctx, VARS, PRODUCT, K>::width()>(sess, estimate);
+        return reveal_wide<KarpLubyEstimate<Ctx, VARS, PRODUCT, K>::width()>(sess, estimate);
     });
 }
 
-// VaziraniAdapter: wraps this pipeline for bench/bench_common.h's generic
+// KarpLubyAdapter: wraps this pipeline for bench/bench_common.h's generic
 // run_one<Adapter,VARS>() sweep runner (see that file's Adapter interface
-// comment) -- lets bench_vazirani.cpp and bench_compare.cpp drive this
-// pipeline through the same generic harness a Karp-Luby pipeline uses.
-struct VaziraniAdapter {
-    static constexpr const char* kName = "vazirani";
+// comment) -- lets bench_compare.cpp drive this pipeline through the same
+// generic harness pipeline/vazirani_pipeline.h's VaziraniAdapter uses.
+struct KarpLubyAdapter {
+    static constexpr const char* kName = "karp_luby";
 
     template <int VARS, int CUBES, int K>
     static unsigned __int128 run(SH2PCSession& sess, const dimacs_dnf::Dnf<VARS, CUBES>& dnf,
                                   NetIO* io, PipelineBreakdown* breakdown) {
-        return run_vazirani_pipeline<VARS, CUBES, K>(sess, dnf, io, breakdown);
+        return run_karp_luby_pipeline<VARS, CUBES, K>(sess, dnf, io, breakdown);
     }
 
     static constexpr int trials(int cubes, double epsilon, double delta) {
-        return gadgets::vazirani_trials(cubes, epsilon, delta);
+        return gadgets::karp_luby_trials(cubes, epsilon, delta);
     }
 
+    // No fixed-point scale to undo here (unlike VaziraniAdapter's
+    // lookup_scale term) -- see gadgets/karp_luby/karp_luby_estimate.h.
     template <int VARS, int CUBES, int K>
     static double unscale(unsigned __int128 raw) {
-        constexpr int PRODUCT = CUBES * CUBES;
-        return (double)raw / (double)((uint64_t)K * gadgets::lookup_scale<PRODUCT>());
+        return (double)raw / (double)K;
     }
 
     template <int VARS, int CUBES, int K>
     static PipelineMemoryReport memory_report() {
-        return vazirani_pipeline_memory_report<VARS, CUBES, K>();
+        return karp_luby_pipeline_memory_report<VARS, CUBES, K>();
     }
 };

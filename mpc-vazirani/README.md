@@ -661,37 +661,61 @@ circuit at this scale):
    works) rather than requiring `ulimit -s` as an external prerequisite.
 
 ```sh
-./build/bench_vazirani <party: 1=ALICE, 2=BOB> <path-to-dimacs-dnf-file>
+./build/bench_vazirani <party: 1=ALICE, 2=BOB> [max_overlap] [seed]
 ```
 
 Same two-party launch convention as `sh2pc_demo` -- two terminals, or
-`./run.sh` adapted to point at `build/bench_vazirani` instead. The same
-small bundled `alice.dnf`/`bob.dnf` (`4` vars, `2` cubes) is reused at
-*every* size in the sweep: `dimacs_dnf::parse<VARS,CUBES>` only requires
-the file's declared vars/cubes fit within the capacity, padding the rest
-(see "DIMACS-DNF cube parser" above), and circuit cost is the same
-regardless of how much of that capacity is "real" vs. padding, by design
--- so this is a valid way to benchmark performance at a given size without
-a separately crafted DNF file per size. The whole sweep now finishes in
-under two minutes (see the table above), so it's fine to just wait on it
-interactively. Example output (`estimate` varies run to run, since it
-depends on fresh joint-random samples each time):
+`./run.sh` adapted to point at `build/bench_vazirani` instead. Unlike
+`sh2pc_demo`, this doesn't take a DNF file: `utils/random_dnf.h` generates
+a fresh random Alice/Bob pair sized *exactly* to each sweep point (`4`
+cubes at `VARS=4`, `64` at `VARS=64`, ...) instead of reusing/padding one
+small fixed file, so `max_overlap` stays meaningful at every point in the
+sweep. `max_overlap` caps the number of *literals* that may agree between
+any cube of Alice's and any cube of Bob's (a variable counts toward a
+cube-pair's overlap iff both cubes constrain it with the same polarity --
+a purely syntactic cap, not a model-count/weight one), clamped to that
+point's own `VARS`; omit it (or pass a value `>= VARS`) for unrestricted
+random cubes. `seed` (default `42`) makes a sweep reproducible -- both
+processes derive the identical pair from the same public
+`VARS`/`CUBES`/`max_overlap`/`seed` without exchanging anything (see
+`bench/bench_common.h`'s `run_one` for why generating both halves in one
+process is fine here despite Alice/Bob's cubes being private input to the
+real circuit -- this is synthetic benchmark data, not a real deployment).
+
+**Pepin ground-truth sanity check.** Alice's process also builds the
+plaintext conjunction of the generated pair (`bench/ground_truth.h`'s
+`plain_conjoin_dnf`, a host-side mirror of `gadgets/general/dnf_distribute.h`'s
+`conjoin_dnf`, skipping padding cubes) and shells out to this repo's
+bundled `pepin` binary -- an approximate DNF model counter -- to get an
+independent estimate of the true satisfying-assignment count, printed as
+`pepin_ground_truth` right next to the protocol's own revealed `estimate`
+so the two can be eyeballed for agreement. `PEPIN_PATH` overrides the
+binary location (default `./pepin`, the project root); if `pepin` can't be
+run or its output can't be parsed, that field is just omitted rather than
+failing the benchmark, since it's a sanity check, not part of the timed
+protocol.
+
+The whole sweep now finishes in a few minutes (see the table above, though
+`max_overlap`/`pepin` add a little overhead on top -- pepin itself stays
+under ~1s even at the largest point, `VARS=64`). Example output (`estimate`
+and `pepin_ground_truth` vary run to run, since generation depends on
+`seed` and the estimate on fresh joint-random samples each time):
 
 ```sh
-# [alice] VARS=4 CUBES=4  epsilon=0.8 delta=0.2 K=118  estimate=9.27966  elapsed=34.48 ms  sent=4.58 MiB recv=399.00 B rounds=475
+# [alice] [vazirani] VARS=4 CUBES=4  epsilon=0.8 delta=0.2 K=118  max_overlap=3  estimate=13.8418  pepin_ground_truth=10  elapsed=12.14 ms  sent=4.58 MiB recv=399.00 B rounds=475
 ```
 
 (Both parties print matching lines for every size -- confirmed by running
-it live: Alice and Bob agree exactly on `estimate`. `elapsed` is formatted
-by `format_duration()`, picking the largest readable unit -- us/ms/s/min/h
--- rather than always printing milliseconds: `VARS=32`'s `1.40 min` reads
-fine either way at the current sweep sizes, but a raw `elapsed_us/1000.0`
-in milliseconds prints in `std::ostream`'s default scientific notation
-past `~1e6` (e.g. `elapsed=1.07004e+06 ms` for a multi-minute run, which
-the old, buggy quadratic `vazirani_trials` routinely produced at
-`VARS=16` -- see above), so `format_duration()` stays in place as
-protection against that, not just for the sizes this sweep happens to hit
-today.)
+it live: Alice and Bob agree exactly on `estimate` (only Alice's line
+carries `pepin_ground_truth`, since only Alice's process invokes `pepin`
+-- see above). `elapsed` is formatted by `format_duration()`, picking the
+largest readable unit -- us/ms/s/min/h -- rather than always printing
+milliseconds: a raw `elapsed_us/1000.0` in milliseconds prints in
+`std::ostream`'s default scientific notation past `~1e6` (e.g.
+`elapsed=1.07004e+06 ms` for a multi-minute run, which the old, buggy
+quadratic `vazirani_trials` routinely produced at `VARS=16` -- see above),
+so `format_duration()` stays in place as protection against that, not just
+for the sizes this sweep happens to hit today.)
 
 **Per-gadget breakdown.** Each size's summary line is followed by two
 sorted (biggest-first) tables answering "which gadget dominates" --
@@ -780,9 +804,14 @@ together"), so there's no runtime flag for them.
 - `src/pipeline/` -- the two-party circuit itself, shared by `main.cpp` and `src/bench/`:
   - `vazirani_pipeline.h` -- `run_vazirani_pipeline<VARS,CUBES,K>` (returns `unsigned __int128`, via the file's own `reveal_wide<W>()`), `SH2PCSession`-only (not `Ctx`-generic like `gadgets/`); also `PipelineBreakdown`/`measure()` (optional per-gadget network accounting) and `PipelineMemoryReport`/`pipeline_memory_report<VARS,CUBES,K>()` (computed per-structure byte sizes) -- see "Benchmarks".
 - `src/bench/` -- benchmarks, following emp-toolkit's own `bench_<component>.cpp` convention (see "Benchmarks"):
-  - `bench_vazirani.cpp` -- times the real circuit across a `VARS=CUBES` sweep from `4` to `32`, all at ApproxMC's default `epsilon=0.8, delta=0.2`, with a per-gadget network/memory breakdown at every size.
+  - `bench_vazirani.cpp` -- times the real circuit across a `VARS=CUBES` sweep from `4` to `64`, all at ApproxMC's default `epsilon=0.8, delta=0.2`, against a fresh random Alice/Bob pair per size (`utils/random_dnf.h`), with a per-gadget network/memory breakdown and a `pepin` ground-truth sanity check at every size.
+  - `bench_compare.cpp` -- the same sweep, running both `vazirani` and `karp_luby` against the *same* generated pair at each size, side by side.
+  - `bench_common.h` -- shared sweep-point runner (`run_one<Adapter,VARS,CUBES,Epsilon,Delta>`) both binaries above build on.
+  - `ground_truth.h` -- the `pepin` sanity check: a host-side mirror of `gadgets/general/dnf_distribute.h`'s `conjoin`/`conjoin_dnf` (`plain_conjoin`/`plain_conjoin_dnf`) to build the plaintext conjunction, a DIMACS-DNF writer, and a `pepin` subprocess wrapper that parses its approximate satisfying-assignment count.
 - `src/utils/` -- data-prep helpers with no emp-tool dependency:
   - `dimacs_dnf.h` -- the DIMACS-DNF cube parser (header-only: `parse<VARS,CUBES>` is a template).
+  - `random_dnf.h` -- `generate_random_dnf_pair<VARS,CUBES>(max_overlap, seed)`: a random Alice/Bob `Dnf` pair with every cross-party cube pair's literal overlap capped at `max_overlap` (see "Benchmarks").
+- `pepin` -- a bundled approximate DNF model counter (statically linked binary, project root), used only as `bench/`'s plaintext ground-truth sanity check -- not part of the 2PC protocol itself.
 - `src/gadgets/` -- Ctx-generic circuit gadgets, reusable across sessions:
   - `circuit_cube.h` -- `CircuitCube`, `CubeData`, `CubeWeight`, `DnfWeight`: the shared wire-level types.
   - `common.h` -- the `using` declarations every gadget below needs, plus two shared helpers (`zext_to`, `indicator`) that replace boilerplate several gadgets used to each reimplement.
